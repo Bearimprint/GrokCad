@@ -2,7 +2,7 @@
 
 > Doc technique pour reprendre sans re-expliquer.  
 > Code : `src/core/walls.ts` → `resolveStarNodeStrokes`, `snapAndRejoinWallsInBox`, `joinWallToWall`.  
-> Version de référence : **0.24.1** (`/join` peigne + snap T/Y sur les axes).
+> Version de référence : **0.24.9** (Y dans un L : butée sur la face extérieure du mur rencontré).
 
 ---
 
@@ -32,7 +32,9 @@ Algo : `joinWallToWall` (allonge l’axe) + `joinStemToBarPeigne` (**priorités 
 ## Ce que fait `/jonction`
 
 1. Cadre **2 clics** autour des extrémités à raccorder.
-2. **Snap** extrémités (murs + polymurs) ≤ **65 cm** :
+2. **Snap** extrémités (murs + polymurs) ≤ **65 cm**, puis **allonge** les bouts
+   encore pendants jusqu’à l’axe d’un autre mur du cadre (comme `/join`) :
+
    - **L (2 murs)** → **intersection des axes support** (allonge/raccourcit seulement, **ne tourne pas** les murs).  
      Bug 0.18.0 : barycentre → murs hors de leurs lignes d’origine (aides vertes).
    - **Colinéaires** → milieu projeté sur l’axe commun.

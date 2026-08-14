@@ -501,5 +501,146 @@ let failed = 0;
   }
 }
 
+// ─── /jonction : bout distant dans le cadre → allonger comme /join ───────────
+{
+  console.log('TEST /jonction étend un pied distant (cadre 3 murs, gap 1 m)');
+  const v = wall('jv', [0, 2, 0], [0, 0, 0]);
+  const h = wall('jh', [0, 0, 0], [3, 0, 0]);
+  const stem = wall('jd', [-1.2, 0.25, 0], [-2.5, 0.25, 0]);
+  const box = { minX: -1.5, minY: -0.5, maxX: 0.5, maxY: 1.5 };
+  const { entities: next, extended, clusters } = snapAndRejoinWallsInBox(
+    [v, h, stem],
+    box,
+    0.65,
+  );
+  const d = next.find((e): e is WallEntity => e.id === 'jd')!;
+  const bar = next.find((e): e is WallEntity => e.id === 'jv')!;
+  const hitX = Math.abs(d.start[0]) < 1e-6 || Math.abs(d.end[0]) < 1e-6;
+  const barKept =
+    Math.hypot(bar.start[0], bar.start[1] - 2) < 1e-6 &&
+    Math.hypot(bar.end[0], bar.end[1]) < 1e-6;
+  if (extended < 1) {
+    console.log(`  FAIL extended=${extended} clusters=${clusters}`);
+    failed += 1;
+  } else if (!hitX) {
+    console.log(`  FAIL pied pas sur x=0 start=${d.start} end=${d.end}`);
+    failed += 1;
+  } else if (!barKept) {
+    console.log('  FAIL barre verticale raccourcie', bar.start, bar.end);
+    failed += 1;
+  } else {
+    console.log('  OK pied allongé en T, barre intacte');
+  }
+}
+
+// ─── L + diagonal : 1ʳᵉ rencontre = horizontal, pas le vertical ─────────────
+{
+  console.log('TEST /jonction L+diag — 1ʳᵉ barre = horizontal, isolant→béton, placo→enduit');
+  const profile: WallLineDef[] = [
+    { offset: 0, color: '#a', lineWidth: 1, lineStyle: 'plein' },
+    { offset: 0.02, color: '#b', lineWidth: 1, lineStyle: 'plein', priority: 5, layerTypeId: 'enduit' },
+    { offset: 0.18, color: '#c', lineWidth: 2, lineStyle: 'plein', priority: 1, layerTypeId: 'structure-beton' },
+    { offset: 0.28, color: '#d', lineWidth: 1, lineStyle: 'plein', priority: 3, layerTypeId: 'isolant' },
+    { offset: 0.293, color: '#e', lineWidth: 1, lineStyle: 'plein', priority: 5, layerTypeId: 'placo-13' },
+  ];
+  const mk = (
+    id: string,
+    start: [number, number, number],
+    end: [number, number, number],
+  ): WallEntity => ({
+    id,
+    kind: 'wall',
+    layer: 'MURS',
+    styleId: 's',
+    path: 'line',
+    flip: false,
+    lines: profile.map((l) => ({ ...l })),
+    start,
+    end,
+  });
+  const v = mk('jv', [-4.672, 1.027, 0], [-4.672, -1.497, 0]);
+  const h = mk('jh', [-4.672, -1.497, 0], [-0.839, -1.497, 0]);
+  const d = mk('jd', [-5.551, -1.854, 0], [-7.097, -2.825, 0]);
+  const box = { minX: -6.2, minY: -2.4, maxX: -3.5, maxY: 0.2 };
+  const { entities: next, extended } = snapAndRejoinWallsInBox([v, h, d], box, 0.65);
+  const dd = next.find((e): e is WallEntity => e.id === 'jd')!;
+  const near =
+    dd.start[1]! > dd.end[1]! ? dd.start : dd.end;
+  // 1ʳᵉ rencontre = axe horizontal y=-1.497, pas le vertical x=-4.672 (y=-1.30)
+  const onHoriz = Math.abs(near[1]! + 1.497) < 0.05;
+  const notVertOnly = Math.abs(near[1]! + 1.302) > 0.05;
+  if (extended < 1) {
+    console.log('  FAIL pas d’allongement');
+    failed += 1;
+  } else if (!onHoriz || !notVertOnly) {
+    console.log(
+      `  FAIL pied sur ${near.map((x) => x.toFixed(3))} (attendu y≈-1.50, pas -1.30)`,
+    );
+    failed += 1;
+  } else {
+    console.log('  OK pied sur l’horizontal (1ʳᵉ rencontre)');
+  }
+
+  const nearLayer = (off: number): [number, number] => {
+    const g = (dd.strokeGeom ?? []).find((x) => Math.abs(x.offset - off) < 1e-9);
+    if (!g) return [NaN, NaN];
+    const a = g.start;
+    const b = g.end;
+    return a[1]! > b[1]! ? [a[0]!, a[1]!] : [b[0]!, b[1]!];
+  };
+  const face0 = nearLayer(0);
+  const face02 = nearLayer(0.02);
+  const iso = nearLayer(0.28);
+  const pla = nearLayer(0.293);
+  // Face 0 / enduit : 1ʳᵉ face réelle = vertical du L
+  const face0OnVert = Math.abs(face0[0] + 4.672) < 0.06;
+  if (!face0OnVert) {
+    console.log(
+      `  FAIL face0/enduit sur (${face0[0].toFixed(3)},${face0[1].toFixed(3)}) (attendu vertical x≈-4.67)`,
+    );
+    failed += 1;
+  } else {
+    console.log('  OK face0/enduit → vertical du L');
+  }
+  // Y dans un L : butée sur la face extérieure (x≈-4.672), pas le béton à -4.652.
+  const face02OnVOuter = Math.abs(face02[0] + 4.672) < 0.03;
+  if (!face02OnVOuter) {
+    console.log(
+      `  FAIL face 0.02 sur (${face02[0].toFixed(3)},${face02[1].toFixed(3)}) (attendu face ext. V x≈-4.672)`,
+    );
+    failed += 1;
+  } else {
+    console.log('  OK face 0.02 → face extérieure du vertical');
+  }
+  // Isolant (prio 3) s’arrête au béton de la barre (y=-1.317 ou -1.477)
+  const isoOnBeton =
+    Math.abs(iso[1] + 1.317) < 0.06 || Math.abs(iso[1] + 1.477) < 0.06;
+  // Placo s’arrête à l’enduit (1ʳᵉ face y≈-1.497)
+  const plaOnEnduit = Math.abs(pla[1] + 1.497) < 0.06;
+  if (!isoOnBeton) {
+    console.log(`  FAIL isolant y=${iso[1]?.toFixed(3)} (attendu béton ≈-1.32)`);
+    failed += 1;
+  } else {
+    console.log('  OK isolant → béton (stop, pas d’onglet)');
+  }
+  if (!plaOnEnduit) {
+    console.log(`  FAIL placo y=${pla[1]?.toFixed(3)} (attendu enduit ≈-1.50)`);
+    failed += 1;
+  } else {
+    console.log('  OK placo → enduit (stop, pas d’onglet)');
+  }
+  const mid = nearLayer(0.18);
+  const midOnH = Math.abs(mid[1] + 1.497) < 0.08 || Math.abs(mid[1] + 1.477) < 0.08;
+  const midNotCorner = Math.abs(mid[0] + 4.652) > 0.04 || midOnH;
+  if (!midOnH) {
+    console.log(
+      `  FAIL béton 0.18 sur (${mid[0].toFixed(3)},${mid[1].toFixed(3)}) (trou au coin)`,
+    );
+    failed += 1;
+  } else {
+    console.log('  OK béton 0.18 → horizontal (pas de trou)');
+  }
+}
+
 console.log('\n' + (failed === 0 ? 'TOUS LES TESTS OK' : `${failed} ÉCHEC(S)`));
 process.exit(failed === 0 ? 0 : 1);

@@ -340,6 +340,7 @@ export class CadDocument {
   ): {
     wallsTouched: number;
     clusters: number;
+    extended: number;
     maxNodeDegree: number;
     signature: string | null;
     nearestEndDist: number | null;
@@ -352,7 +353,7 @@ export class CadDocument {
       snapTol,
       strategy,
     );
-    if (result.wallsTouched > 0 || result.clusters > 0) {
+    if (result.wallsTouched > 0 || result.clusters > 0 || result.extended > 0) {
       this._doc.entities = result.entities;
       this.touch();
       this.emit();
@@ -369,6 +370,7 @@ export class CadDocument {
     return {
       wallsTouched: result.wallsTouched,
       clusters: result.clusters,
+      extended: result.extended,
       maxNodeDegree: result.maxNodeDegree,
       signature: result.signature,
       nearestEndDist: result.nearestEndDist,

@@ -88,6 +88,7 @@ import {
   saveJonctionPref,
   applyJoinWallsToEntities,
   findNearestWall,
+  WALL_JOIN_TOL,
   wallEntityStrokes,
   wallSegFromArcEntity,
   wallSegLineFrom,
@@ -2078,8 +2079,9 @@ export class DrawingTools {
     styleId: string,
     flip: boolean,
   ): import('./types').Vec3[] {
-    const TOL = 0.5;
-    // Trouver le mur qui se termine en tip
+    // Uniquement les murs qui se touchent vraiment (même point).
+    // 50 cm faisait « accrocher » un mur voisin au clic gauche.
+    const TOL = WALL_JOIN_TOL;
     let endWall: import('./types').WallEntity | null = null;
     let best = TOL;
     for (const w of this.doc.walls) {
@@ -3428,21 +3430,28 @@ export class DrawingTools {
     });
     this.rejoinWallsInBoxCount = wallsInBox.length;
 
-    // L pur (degré ≤ 2) : valider tout de suite, pas de cycle
+    // L pur (degré ≤ 2) ou simple allongement : valider tout de suite
     if (first.maxNodeDegree < 3) {
       const sid = preferred;
-      if (first.clusters > 0) {
+      if (first.extended > 0 || first.clusters > 0) {
+        const bits: string[] = [];
+        if (first.extended > 0) {
+          bits.push(`${first.extended} mur(s) prolongé(s)`);
+        }
+        if (first.clusters > 0) {
+          bits.push(`${first.clusters} nœud(s)`);
+        }
         this.feedback(
-          `JONCTION ${APP_VERSION} — ${first.clusters} nœud(s) L, ${first.wallsTouched} mur(s) snappé(s), ${wallsInBox.length} mur(s) — ${JONCTION_STRATEGY_LABELS[sid]}.`,
+          `JONCTION ${APP_VERSION} — ${bits.join(', ')}, ${first.wallsTouched} mur(s) touché(s), ${wallsInBox.length} dans le cadre — ${JONCTION_STRATEGY_LABELS[sid]}.`,
           'ok',
         );
       } else {
         const near =
           first.nearestEndDist != null && Number.isFinite(first.nearestEndDist)
-            ? ` Plus proches extrémités : ${(first.nearestEndDist * 100).toFixed(0)} cm (tol. 65 cm — rapprochez les bouts ou /join).`
-            : ' Englober les **coins** (tol. 65 cm).';
+            ? ` Plus proches extrémités non jointes : ${(first.nearestEndDist * 100).toFixed(0)} cm (axes sans intersection dans le cadre).`
+            : ' Englober les extrémités à raccorder.';
         this.feedback(
-          `JONCTION ${APP_VERSION} — aucun snap (${wallsInBox.length} mur(s) dans le cadre).${near}`,
+          `JONCTION ${APP_VERSION} — aucun raccord (${wallsInBox.length} mur(s) dans le cadre).${near}`,
           'info',
         );
       }

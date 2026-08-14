@@ -1,7 +1,7 @@
 {
   "name": "grokcad",
   "private": true,
-  "version": "0.24.1",
+  "version": "0.24.9",
   "type": "module",
   "description": "GrokCAD — éditeur CAO 3D inspiré d'ARC+",
   "scripts": {

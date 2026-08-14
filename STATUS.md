@@ -6,17 +6,78 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.24.1**
+**Version courante : 0.24.9**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.24.1
+# → http://localhost:5173/  ·  titre GrokCad v.0.24.9
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
+
+---
+
+## Session 2026-08-14 — `/jonction` Y butée face ext. (→ **0.24.9**)
+
+Le 0.24.8 perçait encore le L (0,02 → béton intérieur du vertical, isolant → béton H). `Y_jonction_OK.png` est une **butée** : chaque trait du 45° s’arrête sur la **face extérieure** du mur du L qu’il rencontre en premier (2 contre le vertical, le reste contre l’horizontal). Pas d’onglet, pas de perçage. Le T simple (`/join`) garde le BIM couches.
+
+---
+
+## Session 2026-08-14 — `/jonction` Y enveloppe du L (→ **0.24.8**)
+
+Le béton extérieur du 45° (offset 0,02, prio 1) s’arrêtait au **béton intérieur** de l’horizontal (t un peu plus petit que le vertical). Trou dans le faisceau, 2 traits qui n’atteignent pas le vertical, 3 traits sous le L.
+
+Désormais : 1ʳᵉ rencontre = **face d’entrée** du L (enveloppe), puis BIM **sur ce mur seul**. Résultat attendu (`Y_jonction_OK.png`) : 2 traits → vertical, isolant/placo → horizontal, pas de trou.
+
+---
+
+## Session 2026-08-14 — `/jonction` Y sans trou (→ **0.24.7**)
+
+Le béton du 45° s’arrêtait au **coin** du L (hit sur le bout du vertical) et ouvrait un trou dans le faisceau. Les hits sur le partenaire à moins de 8 cm du coin sont ignorés : ce trait continue jusqu’à l’horizontal (comme `Y_jonction_OK.png`).
+
+---
+
+## Session 2026-08-14 — `/jonction` parallèles réelles (→ **0.24.6**)
+
+L’intersection se faisait depuis le coin (faux vertical décalé). Désormais chaque couche du 45° coupe les **traits réels** du L : celles qui voient le vertical s’y arrêtent, celles qui voient l’horizontal (isolant→béton, placo→enduit) s’y arrêtent.
+
+---
+
+## Session 2026-08-14 — `/jonction` L+diag first-hit 2 murs (→ **0.24.5**)
+
+Les couches décalées du 45° traversaient le **vertical** du L pour rejoindre l’horizontal. First-hit contre **les deux** murs du L : isolant / placo s’arrêtent à la 1ʳᵉ face béton / enduit rencontrée (H ou V). Pas d’allongement d’un mur déjà en T mid-span.
+
+---
+
+## Session 2026-08-14 — `/jonction` 1ʳᵉ barre (→ **0.24.4**)
+
+Un 45° + L collait le pied au **vertical** (T sur le segment) au lieu de l’**horizontal** rencontré en premier. Isolant / placo s’arrêtaient trop tôt.
+
+| Règle | Comportement |
+|-------|----------------|
+| Cible | 1ʳᵉ intersection d’axes le long du pied (pas « T préféré ») |
+| Isolant | stop sur le béton de cette barre (pas d’onglet) |
+| Placo | stop sur l’enduit de cette barre (pas d’onglet) |
+
+---
+
+## Session 2026-08-14 — `/ml` plus d’accroche au clic gauche (→ **0.24.3**)
+
+Le preview `/ml` enchaînait un mur existant jusqu’à **50 cm** du départ (≈ 100 px zoomé) et dessinait l’onglet comme si on s’était accroché. Clic gauche = point brut ; seul le clic droit accroche (20 px).
+
+---
+
+## Session 2026-08-14 — `/jonction` cadre 3 murs (0.24.1 → **0.24.2**)
+
+`/join` OK ; `/jonction` ignorait un pied à ~1 m d’un L déjà collé (tol. snap 65 cm) et classait en L un T à 20 cm du bout (zone = épaisseur 29 cm).
+
+| Correctif | Détail |
+|-----------|--------|
+| Zone L/T | 5–10 cm (plus l’épaisseur entière) |
+| Cadre | bout **pendant** allongé jusqu’à l’axe d’un autre mur du cadre |
 
 ---
 
@@ -94,7 +155,7 @@ Revue `/jonction` + `/join` : bugs de snap T/Y, peigne, zone L, stratégie Y/N.
 
 ## Checklist reprise 30 s
 
-1. `lancer-GrokCad.sh` → **GrokCad v.0.24.1**
+1. `lancer-GrokCad.sh` → **GrokCad v.0.24.9**
 2. Smoke texte : `/txt Cuisine` · `/rect` + Shift · `/textbox`
 3. Smoke cote : `/cote` (2+ segments, Échap, sélection texte seul, `/m1` ligne vs texte)
 4. Smoke move : `/move` et `/m1` avec **[Shift]** H/45°/V

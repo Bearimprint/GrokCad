@@ -732,6 +732,33 @@ function intersectWallParallels(
 /**
  * Intersection couche o entre deux CenterSeg (offsets signés).
  */
+/** Intersection des parallèles **réelles** (offset depuis l’axe de chaque mur). */
+function segsIntersectActual(
+  a: CenterSeg,
+  rawOffA: number,
+  b: CenterSeg,
+  rawOffB: number,
+): Vec3 | null {
+  const dirA = normalize(sub(a.end, a.start));
+  const dirB = normalize(sub(b.end, b.start));
+  if (xyLen(dirA) < EPS || xyLen(dirB) < EPS) return null;
+  const oA = rawOffA * (a.flip ? -1 : 1);
+  const oB = rawOffB * (b.flip ? -1 : 1);
+  const nA = leftNormalFromDir(dirA);
+  const nB = leftNormalFromDir(dirB);
+  const pA: Vec3 = [
+    a.start[0] + nA[0]! * oA,
+    a.start[1] + nA[1]! * oA,
+    a.start[2],
+  ];
+  const pB: Vec3 = [
+    b.start[0] + nB[0]! * oB,
+    b.start[1] + nB[1]! * oB,
+    b.start[2],
+  ];
+  return lineIntersect2d(pA, dirA, pB, dirB);
+}
+
 function segsIntersectAtOffset(
   a: CenterSeg,
   b: CenterSeg,
@@ -1747,7 +1774,9 @@ function joinEndZone(
   a: readonly WallLineDef[],
   b: readonly WallLineDef[],
 ): number {
-  return Math.max(wallProfileWidth(a), wallProfileWidth(b), 0.05);
+  // 5–10 cm : un T à 20 cm du bout d’un mur 29 cm d’épaisseur reste un T.
+  const thick = Math.max(wallProfileWidth(a), wallProfileWidth(b), 0);
+  return Math.max(0.05, Math.min(0.1, thick * 0.25 || 0.05));
 }
 
 function findMidTJoins(
@@ -1775,8 +1804,14 @@ function findMidTJoins(
         if (barLen < EPS) continue;
         const endZone = joinEndZone(stem.lines, bar.lines);
         const along = t * barLen;
-        if (along < endZone || along > barLen - endZone) continue;
-        if (t <= 0.001 || t >= 0.999) continue;
+        const onSpan = along >= endZone && along <= barLen - endZone;
+        const pad = Math.max(wallProfileWidth(bar.lines), 0.3) + 0.5;
+        // Hors segment mais clairement pas un coin L (écart > zone de bout)
+        const nearMiss =
+          (along < -endZone && along > -pad) ||
+          (along > barLen + endZone && along < barLen + pad);
+        if (!onSpan && !nearMiss) continue;
+        if (onSpan && (t <= 0.001 || t >= 0.999)) continue;
         const key = `${stem.id}|${which}|${bar.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1797,12 +1832,23 @@ function findMidTJoins(
  *   Face d’entrée structure ouverte dans la bande structure du pied.
  * - Peaux plus faibles, côté pied, ouvertes sur la hauteur du pied.
  */
+function toCenterSeg(w: WallEntity, id = w.id): CenterSeg {
+  return {
+    id,
+    start: w.start,
+    end: w.end,
+    lines: w.lines,
+    flip: w.flip,
+  };
+}
+
 function joinStemToBarPeigne(
   stem: WallEntity,
   which: 'start' | 'end',
   bar: WallEntity,
   barGeomsIn: readonly WallStrokeGeom[],
   stemGeomsIn?: readonly WallStrokeGeom[],
+  extraBars: readonly WallEntity[] = [],
 ): { stemGeoms: WallStrokeGeom[]; barGeoms: WallStrokeGeom[] } {
   const copyBar = (): WallStrokeGeom[] =>
     barGeomsIn.map((g) => ({
@@ -1811,20 +1857,12 @@ function joinStemToBarPeigne(
       end: [...g.end] as Vec3,
     }));
 
-  const stemSeg: CenterSeg = {
-    id: stem.id,
-    start: stem.start,
-    end: stem.end,
-    lines: stem.lines,
-    flip: stem.flip,
-  };
-  const barSeg: CenterSeg = {
-    id: bar.id,
-    start: bar.start,
-    end: bar.end,
-    lines: bar.lines,
-    flip: bar.flip,
-  };
+  const stemSeg = toCenterSeg(stem);
+  const barSeg = toCenterSeg(bar);
+  const barrierSegs: CenterSeg[] = [
+    barSeg,
+    ...extraBars.filter((w) => w.id !== bar.id && w.path === 'line').map((w) => toCenterSeg(w)),
+  ];
   const near = which === 'start' ? stem.start : stem.end;
   const far = which === 'start' ? stem.end : stem.start;
   const baseDir = normalize(sub(stem.end, stem.start));
@@ -1874,6 +1912,21 @@ function joinStemToBarPeigne(
   const structureEntryOff = stemFromHighOffset
     ? coreOuter
     : coreInner;
+
+  /** Face d’enveloppe (entrée) d’un mur du L, côté pied. */
+  const entryOffOf = (bseg: CenterSeg): number => {
+    if (bseg.lines.length === 0) return 0;
+    const bDir = normalize(sub(bseg.end, bseg.start));
+    if (xyLen(bDir) < EPS) return Math.min(...bseg.lines.map((l) => l.offset));
+    const bN = leftNormalFromDir(bDir);
+    const bSide = bseg.flip ? -1 : 1;
+    const signed =
+      ((stemMid[0]! - bseg.start[0]!) * bN[0]! +
+        (stemMid[1]! - bseg.start[1]!) * bN[1]!) *
+      bSide;
+    const offs = bseg.lines.map((l) => l.offset);
+    return signed > 0 ? Math.max(...offs) : Math.min(...offs);
+  };
 
   // Peaux barre à ouvrir :
   // 1) peaux faibles extérieures au béton (côté pied)
@@ -1926,46 +1979,74 @@ function joinStemToBarPeigne(
     let bestHit: Vec3 | null = null;
     let bestSame = false;
 
-    for (const oln of bar.lines) {
-      const op = wallLineJoinPriority(bar.lines, oln);
-      // Traverse uniquement les prio plus faibles (nombre > myPrio)
-      if (op > myPrio) continue;
-      // op ≤ myPrio : barrière ou joint — 1ʳᵉ rencontre (min-t)
-      // Même prio : TOUJOURS stop (ne pas traverser l’épaisseur du même matériau)
-      //   ex. face béton intérieure du pied s’arrête sur la face ext. béton barre
-
-      const isPreferred =
-        !!preferredSame && Math.abs(preferredSame.offset - oln.offset) < 1e-9;
-
-      const hit = segsIntersectAtOffset(
-        stemSeg,
-        barSeg,
-        ln.offset,
-        oln.offset,
-        near,
-      );
-      if (!hit || dist(hit, near) > maxSearch) continue;
+    const hitOnSeg = (
+      bseg: CenterSeg,
+      barOff: number,
+    ): { hit: Vec3; t: number; along: number; slen: number } | null => {
+      const hit = segsIntersectActual(stemSeg, ln.offset, bseg, barOff);
+      if (!hit || dist(hit, near) > maxSearch) return null;
+      const pr = projectOnSegmentParam(bseg.start, bseg.end, hit);
+      const slen = dist(bseg.start, bseg.end);
+      if (slen < EPS) return null;
+      const along = pr.t * slen;
+      // 2 mm : un pad de 2 cm volait le béton 0.18 (rate V de 7 mm) et
+      // le faisait dépasser sous le L.
+      if (along < -0.002 || along > slen + 0.002) return null;
       const t = paramT(hit);
-      if (t < tMin - 1e-9) continue;
-      const samePrioJoin = op === myPrio && isPreferred;
-      if (
-        t < bestT - 1e-9 ||
-        (Math.abs(t - bestT) <= 1e-9 && samePrioJoin && !bestSame)
-      ) {
-        bestT = t;
-        bestHit = hit;
-        bestSame = samePrioJoin;
+      if (t < tMin - 1e-9) return null;
+      return { hit, t, along, slen };
+    };
+
+    // Y dans un L (extraBars) : butée sur l’enveloppe — face d’entrée du
+    // mur rencontré, sans percer les couches intérieures. C’est le dessin
+    // Y_jonction_OK.png : 2 traits contre le vertical, les autres contre
+    // l’horizontal, tous sur la face extérieure (pas d’onglet, pas de
+    // perçage béton). T simple : BIM first-hit inchangé.
+    if (extraBars.length > 0) {
+      for (const bseg of barrierSegs) {
+        const found = hitOnSeg(bseg, entryOffOf(bseg));
+        if (!found) continue;
+        if (found.t < bestT - 1e-9) {
+          bestT = found.t;
+          bestHit = found.hit;
+          bestSame = false;
+        }
+      }
+    } else {
+      for (const bseg of barrierSegs) {
+        for (const oln of bseg.lines) {
+          const op = wallLineJoinPriority(bseg.lines, oln);
+          // Traverse uniquement les prio plus faibles (nombre > myPrio)
+          if (op > myPrio) continue;
+          // op ≤ myPrio : 1ʳᵉ rencontre = stop (isolant → béton, placo → enduit)
+
+          const isPreferred =
+            bseg.id === bar.id &&
+            !!preferredSame &&
+            Math.abs(preferredSame.offset - oln.offset) < 1e-9;
+
+          const found = hitOnSeg(bseg, oln.offset);
+          if (!found) continue;
+          const samePrioJoin = op === myPrio && isPreferred;
+          if (
+            found.t < bestT - 1e-9 ||
+            (Math.abs(found.t - bestT) <= 1e-9 && samePrioJoin && !bestSame)
+          ) {
+            bestT = found.t;
+            bestHit = found.hit;
+            bestSame = samePrioJoin;
+          }
+        }
       }
     }
 
     // Repli jumelle si aucun hit
     if (!bestHit && preferredSame) {
-      const hit = segsIntersectAtOffset(
+      const hit = segsIntersectActual(
         stemSeg,
-        barSeg,
         ln.offset,
+        barSeg,
         preferredSame.offset,
-        near,
       );
       if (hit && dist(hit, near) <= maxSearch) bestHit = hit;
     }
@@ -2316,12 +2397,22 @@ export function recomputeLinearWallJoints(
       const barGeomsIn =
         geomById.get(mid.barId) ?? simpleStrokeGeom(bar);
       const stemGeomsIn = geomById.get(mid.stemId);
+      const extraBars = walls.filter((w) => {
+        if (w.id === stem.id || w.id === bar.id || w.path !== 'line') return false;
+        return (
+          dist(w.start, bar.start) <= WALL_JOIN_TOL ||
+          dist(w.start, bar.end) <= WALL_JOIN_TOL ||
+          dist(w.end, bar.start) <= WALL_JOIN_TOL ||
+          dist(w.end, bar.end) <= WALL_JOIN_TOL
+        );
+      });
       const { stemGeoms, barGeoms } = joinStemToBarPeigne(
         stem,
         mid.which,
         bar,
         barGeomsIn,
         stemGeomsIn,
+        extraBars,
       );
       geomById.set(mid.stemId, stemGeoms);
       geomById.set(mid.barId, barGeoms);
@@ -2457,6 +2548,8 @@ export type JoinWallsResult =
       which: 'start' | 'end';
       mode: 'T' | 'L';
       lengthened: number;
+      /** Paramètre le long du stem (far→near), pour choisir la 1ʳᵉ cible. */
+      alongStem: number;
       hit: Vec3;
     }
   | { ok: false; reason: string };
@@ -2478,6 +2571,11 @@ export function joinWallToWall(
     which?: 'start' | 'end';
     /** Point de clic sur le stem (affine le choix d’extrémité). */
     clickOnStem?: Vec3;
+    /**
+     * /jonction : rester sur l’axe du pied. Un hit hors segment mais sur
+     * l’axe = T (on n’attire pas le pied au coin, on ne bouge pas la barre).
+     */
+    keepAxis?: boolean;
   },
 ): JoinWallsResult {
   if (stemIn.id === targetIn.id) {
@@ -2588,17 +2686,21 @@ export function joinWallToWall(
 
   const endZone = joinEndZone(stemIn.lines, targetIn.lines);
   const alongBar = tBar * barLen;
-  const nearTargetEnd =
-    alongBar <= endZone || alongBar >= barLen - endZone || tBar < 0 || tBar > 1;
-  const mode: 'T' | 'L' = nearTargetEnd ? 'L' : 'T';
+  const trulyAtEnd =
+    (tBar >= 0 && tBar <= 1 && (alongBar <= endZone || alongBar >= barLen - endZone)) ||
+    (tBar < 0 && Math.abs(alongBar) <= endZone) ||
+    (tBar > 1 && Math.abs(alongBar - barLen) <= endZone);
+  let mode: 'T' | 'L' = trulyAtEnd || tBar < 0 || tBar > 1 ? 'L' : 'T';
+  if (opts?.keepAxis && !trulyAtEnd) {
+    // 1ʳᵉ rencontre hors segment (ex. L déjà là, hit 30 cm avant le coin) = T
+    mode = 'T';
+  }
 
-  // Snap hit sur le segment si L légèrement hors bout
   let joinPt: Vec3 = [hit[0], hit[1], hit[2]];
-  if (mode === 'L') {
+  if (mode === 'L' && !opts?.keepAxis) {
     if (tBar < 0) joinPt = [...targetIn.start] as Vec3;
     else if (tBar > 1) joinPt = [...targetIn.end] as Vec3;
     else joinPt = hit;
-    // Préférer l’intersection d’axes si elle est proche du bout
     const dStart = dist(hit, targetIn.start);
     const dEnd = dist(hit, targetIn.end);
     if (dStart <= endZone || dEnd <= endZone) {
@@ -2631,7 +2733,7 @@ export function joinWallToWall(
   };
 
   // L : coller aussi l’extrémité cible à l’intersection des axes
-  if (mode === 'L') {
+  if (mode === 'L' && !opts?.keepAxis) {
     const dS = dist(joinPt, targetIn.start);
     const dE = dist(joinPt, targetIn.end);
     if (dS <= dE) {
@@ -2659,6 +2761,7 @@ export function joinWallToWall(
     which,
     mode,
     lengthened,
+    alongStem,
     hit: joinPt,
   };
 }
@@ -2945,6 +3048,8 @@ export type JonctionResult = {
   snappedEntities: Entity[];
   wallsTouched: number;
   clusters: number;
+  /** Murs « pendants » allongés jusqu’à un autre mur du cadre (comme /join). */
+  extended: number;
   /** Degré max d’un nœud fusionné (nb d’extrémités dans le plus gros cluster). */
   maxNodeDegree: number;
   /** Signature du plus gros nœud (pour mémoriser la solution Y/N). */
@@ -3000,10 +3105,152 @@ function buildNodeSignature(
   return `${group.length}w/${layers}L/p${prioKey}/${angles.join(',')}`;
 }
 
+function boxOverlapsSegment(
+  a: Vec3,
+  b: Vec3,
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+): boolean {
+  const minX = Math.min(a[0], b[0]);
+  const maxX = Math.max(a[0], b[0]);
+  const minY = Math.min(a[1], b[1]);
+  const maxY = Math.max(a[1], b[1]);
+  return maxX >= box.minX && minX <= box.maxX && maxY >= box.minY && minY <= box.maxY;
+}
+
+function endTouchesAnother(
+  wallId: string,
+  pt: Vec3,
+  walls: readonly WallEntity[],
+): boolean {
+  for (const w of walls) {
+    if (w.id === wallId || w.path !== 'line') continue;
+    if (dist(pt, w.start) <= WALL_JOIN_TOL || dist(pt, w.end) <= WALL_JOIN_TOL) {
+      return true;
+    }
+    const { t, dist: d } = projectOnSegmentParam(w.start, w.end, pt);
+    if (d <= 0.02 && t > 0.001 && t < 0.999) return true;
+  }
+  return false;
+}
+
+/**
+ * Murs du cadre dont un bout n’est joint à personne : les allonger
+ * jusqu’à l’axe d’un autre mur du cadre (même algo que /join).
+ */
+function extendDanglingWallsInBox(
+  entities: readonly Entity[],
+  box: { minX: number; minY: number; maxX: number; maxY: number },
+  skipStemIds?: ReadonlySet<string>,
+): { entities: Entity[]; extended: number } {
+  const walls = entities.filter(
+    (e): e is WallEntity => e.kind === 'wall' && e.path === 'line',
+  );
+  if (walls.length < 2) {
+    return { entities: entities.map((e) => ({ ...e })), extended: 0 };
+  }
+
+  type Pick = {
+    stemId: string;
+    targetId: string;
+    which: 'start' | 'end';
+  };
+  const picks: Pick[] = [];
+
+  for (const stem of walls) {
+    if (skipStemIds?.has(stem.id)) continue;
+    const options: ('start' | 'end')[] = [];
+    if (
+      stem.start[0] >= box.minX &&
+      stem.start[0] <= box.maxX &&
+      stem.start[1] >= box.minY &&
+      stem.start[1] <= box.maxY &&
+      !endTouchesAnother(stem.id, stem.start, walls)
+    ) {
+      options.push('start');
+    }
+    if (
+      stem.end[0] >= box.minX &&
+      stem.end[0] <= box.maxX &&
+      stem.end[1] >= box.minY &&
+      stem.end[1] <= box.maxY &&
+      !endTouchesAnother(stem.id, stem.end, walls)
+    ) {
+      options.push('end');
+    }
+    if (options.length === 0) continue;
+
+    let best: (Pick & { score: number }) | null = null;
+    for (const which of options) {
+      for (const target of walls) {
+        if (target.id === stem.id) continue;
+        if (!boxOverlapsSegment(target.start, target.end, box)) continue;
+        const result = joinWallToWall(stem, target, {
+          which,
+          keepAxis: true,
+        });
+        if (!result.ok) continue;
+        const far = which === 'start' ? stem.end : stem.start;
+        const near = which === 'start' ? stem.start : stem.end;
+        const dir0 = normalize(sub(near, far));
+        if (xyLen(dir0) < EPS) continue;
+        const n0 = leftNormalFromDir(dir0);
+        const offAxis = Math.abs(
+          (result.hit[0]! - far[0]!) * n0[0]! +
+            (result.hit[1]! - far[1]!) * n0[1]!,
+        );
+        if (offAxis > 0.001) continue;
+        const score = result.alongStem;
+        if (!best || score < best.score) {
+          best = { stemId: stem.id, targetId: target.id, which, score };
+        }
+      }
+    }
+    if (best) {
+      picks.push({
+        stemId: best.stemId,
+        targetId: best.targetId,
+        which: best.which,
+      });
+    }
+  }
+
+  if (picks.length === 0) {
+    return { entities: entities.map((e) => ({ ...e })), extended: 0 };
+  }
+
+  let next: Entity[] = entities.map((e) => e);
+  let n = 0;
+  const used = new Set<string>();
+  for (const p of picks) {
+    if (used.has(p.stemId)) continue;
+    const stem = next.find(
+      (e): e is WallEntity => e.kind === 'wall' && e.id === p.stemId,
+    );
+    const target = next.find(
+      (e): e is WallEntity => e.kind === 'wall' && e.id === p.targetId,
+    );
+    if (!stem || !target) continue;
+    const result = joinWallToWall(stem, target, {
+      which: p.which,
+      keepAxis: true,
+    });
+    if (!result.ok) continue;
+    next = next.map((e) => {
+      if (e.id === p.stemId) return result.stem;
+      if (e.id === p.targetId) return result.target;
+      return e;
+    });
+    used.add(p.stemId);
+    n += 1;
+  }
+  return { entities: next, extended: n };
+}
+
 /**
  * /jonction : dans un cadre, regroupe les extrémités de murs (simples **et**
  * polymurs) proches, les fusionne **sur les axes** (jamais de rotation),
- * puis recalcule les onglets.
+ * allonge les bouts pendants jusqu’à un autre mur du cadre, puis recalcule
+ * les onglets.
  */
 export function snapAndRejoinWallsInBox(
   entities: readonly Entity[],
@@ -3036,18 +3283,20 @@ export function snapAndRejoinWallsInBox(
       snappedEntities: entities.map((e) => ({ ...e })),
       wallsTouched: 0,
       clusters: 0,
+      extended: 0,
       maxNodeDegree: 0,
       signature: null,
       nearestEndDist: null,
     };
   }
 
-  // Plus petite distance entre extrémités de murs distincts (diagnostic)
+  // Plus proche paire **non déjà jointe** (ignore les L déjà collés)
   let nearestEndDist: number | null = null;
   for (let i = 0; i < ends.length; i++) {
     for (let j = i + 1; j < ends.length; j++) {
       if (ends[i]!.wallId === ends[j]!.wallId) continue;
       const d = dist(ends[i]!.point, ends[j]!.point);
+      if (d <= WALL_JOIN_TOL) continue;
       if (nearestEndDist == null || d < nearestEndDist) nearestEndDist = d;
     }
   }
@@ -3091,14 +3340,27 @@ export function snapAndRejoinWallsInBox(
   }
 
   if (snapAt.size === 0) {
-    // Extrémités dans le cadre mais trop loin pour fusionner → recalcul joints seuls
-    const joined = applyWallJointsToEntities(entities, WALL_JOIN_TOL, strategy);
+    const ext = extendDanglingWallsInBox(entities, box);
+    if (ext.extended === 0) {
+      const joined = applyWallJointsToEntities(entities, WALL_JOIN_TOL, strategy);
+      return {
+        entities: joined,
+        snappedEntities: entities.map((e) => ({ ...e })),
+        wallsTouched: 0,
+        clusters: 0,
+        extended: 0,
+        maxNodeDegree: 0,
+        signature: null,
+        nearestEndDist,
+      };
+    }
     return {
-      entities: joined,
-      snappedEntities: entities.map((e) => ({ ...e })),
-      wallsTouched: 0,
+      entities: applyWallJointsToEntities(ext.entities, WALL_JOIN_TOL, strategy),
+      snappedEntities: ext.entities,
+      wallsTouched: ext.extended,
       clusters: 0,
-      maxNodeDegree: 0,
+      extended: ext.extended,
+      maxNodeDegree: 2,
       signature: null,
       nearestEndDist,
     };
@@ -3256,13 +3518,27 @@ export function snapAndRejoinWallsInBox(
     return e;
   });
 
+  const ext = extendDanglingWallsInBox(next, box, wallsTouched);
+  for (const e of ext.entities) {
+    if (e.kind !== 'wall') continue;
+    const before = next.find((x) => x.id === e.id);
+    if (
+      before &&
+      before.kind === 'wall' &&
+      (dist(before.start, e.start) > 1e-9 || dist(before.end, e.end) > 1e-9)
+    ) {
+      wallsTouched.add(e.id);
+    }
+  }
+  const after = ext.entities;
   const joinTol = Math.max(WALL_JOIN_TOL, maxSnapGap + 1e-6);
   return {
-    entities: applyWallJointsToEntities(next, joinTol, strategy),
-    snappedEntities: next,
+    entities: applyWallJointsToEntities(after, joinTol, strategy),
+    snappedEntities: after,
     wallsTouched: wallsTouched.size,
     clusters: multiClusters,
-    maxNodeDegree,
+    extended: ext.extended,
+    maxNodeDegree: ext.extended > 0 ? Math.max(maxNodeDegree, 2) : maxNodeDegree,
     signature,
     nearestEndDist,
   };
