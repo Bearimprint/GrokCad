@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GrokCad</title>
+    <link rel="stylesheet" href="/src/styles/main.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header id="titlebar">
+        <div class="brand">
+          <span class="logo">GrokCad</span>
+          <span id="doc-title" class="doc-title">Sans titre.gkd</span>
+        </div>
+        <div id="workplane-badge" class="workplane" title="Plan de travail">XY</div>
+      </header>
+
+      <div id="style-bar" aria-label="Styles trait, texte et cotation"></div>
+
+      <main id="viewport-wrap">
+        <canvas id="viewport" tabindex="0" aria-label="Zone de dessin 3D"></canvas>
+        <div id="axis-gizmo" aria-hidden="true">
+          <span class="ax x">X</span>
+          <span class="ax y">Y</span>
+          <span class="ax z">Z</span>
+        </div>
+      </main>
+
+      <footer id="statusbar">
+        <div class="cmd-zone">
+          <label for="cmd-input" class="cmd-prompt">GrokCAD&gt;</label>
+          <input
+            id="cmd-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="/text  ·  /rect  ·  /textbox  ·  /cote  ·  /help"
+          />
+          <div id="cmd-feedback" class="cmd-feedback" aria-live="polite"></div>
+        </div>
+        <div class="status-zone">
+          <div class="stat" title="Échelle d'affichage">
+            <span class="stat-label">Échelle</span>
+            <span id="stat-scale">1 : 100</span>
+          </div>
+          <div class="stat" title="Position souris dans le plan de travail">
+            <span class="stat-label">Souris</span>
+            <span id="stat-mouse">—</span>
+          </div>
+          <div class="stat" title="Mode caméra">
+            <span class="stat-label">Vue</span>
+            <span id="stat-view">Plan XY</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

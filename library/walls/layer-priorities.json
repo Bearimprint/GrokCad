@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "description": "Catalogue des types de couches de mur et de leur priorité de raccord. Priorité 1 = plus haute importance (traverse les couches de priorité plus faible). Éditable : GrokCAD recharge ce fichier à l'ouverture de la bibliothèque de murs.",
+  "types": [
+    {
+      "id": "structure-beton",
+      "priority": 1,
+      "name": "mur porteur en béton armé",
+      "defaultColor": "#4a4a4a",
+      "defaultLineWidth": 2,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "structure-parpaing",
+      "priority": 2,
+      "name": "parpaing / brique porteuse",
+      "defaultColor": "#6b6b6b",
+      "defaultLineWidth": 2,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "structure-ossature",
+      "priority": 2,
+      "name": "ossature bois / métal",
+      "defaultColor": "#8b6914",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "isolant",
+      "priority": 3,
+      "name": "isolant thermique",
+      "defaultColor": "#e6b800",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "tiret"
+    },
+    {
+      "id": "air",
+      "priority": 4,
+      "name": "lame d'air / cavité",
+      "defaultColor": "#9aa0a6",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "pointille"
+    },
+    {
+      "id": "placo-13",
+      "priority": 5,
+      "name": "placo-platre 13mm",
+      "defaultColor": "#c8c8c8",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "placo-ba13-double",
+      "priority": 5,
+      "name": "double BA13",
+      "defaultColor": "#b0b0b0",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "enduit",
+      "priority": 5,
+      "name": "enduit / finition",
+      "defaultColor": "#e8e8e8",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "plein"
+    },
+    {
+      "id": "membrane",
+      "priority": 6,
+      "name": "membrane / pare-vapeur",
+      "defaultColor": "#5c9ead",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "pointille"
+    },
+    {
+      "id": "generique",
+      "priority": 3,
+      "name": "couche générique",
+      "defaultColor": "#000000",
+      "defaultLineWidth": 1,
+      "defaultLineStyle": "plein"
+    }
+  ]
+}

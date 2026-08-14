@@ -1,0 +1,178 @@
+{
+  "magic": "GKD1",
+  "version": "0.8.0",
+  "modified": "2026-07-21T11:59:30.304Z",
+  "camera": {
+    "target": [
+      0,
+      0,
+      0
+    ],
+    "position": [
+      0,
+      0,
+      3434.5084795622797
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "mode": "ortho",
+    "orthoHalfHeight": 343.45084795622796,
+    "fov": 50,
+    "workplane": "XY"
+  },
+  "entities": [
+    {
+      "id": "line_1_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        0,
+        0.3784841484494166,
+        0
+      ],
+      "end": [
+        5.684341886080802e-14,
+        -572.0395957785972,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_2_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        5.684341886080802e-14,
+        -572.0395957785972,
+        0
+      ],
+      "end": [
+        312.0268498168411,
+        -572.0395957785972,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_3_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        312.0268498168411,
+        -572.0395957785972,
+        0
+      ],
+      "end": [
+        312.02684981684115,
+        2.842170943040401e-14,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_4_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        312.02684981684115,
+        2.842170943040401e-14,
+        0
+      ],
+      "end": [
+        -0.0055806326087122216,
+        0,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_5_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        43.771043771043765,
+        -165.7270152903834,
+        0
+      ],
+      "end": [
+        43.77104377104379,
+        -520.3864791226165,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_6_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        43.77104377104379,
+        -520.3864791226165,
+        0
+      ],
+      "end": [
+        272.75205488596316,
+        -520.3864791226165,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_7_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        272.75205488596316,
+        -520.3864791226165,
+        0
+      ],
+      "end": [
+        272.75205488596316,
+        -169.9114883217362,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    },
+    {
+      "id": "line_8_mruloxs7",
+      "kind": "line",
+      "layer": "DESSIN",
+      "start": [
+        272.75205488596316,
+        -169.9114883217362,
+        0
+      ],
+      "end": [
+        49.36816635683928,
+        -169.91148832173621,
+        0
+      ],
+      "color": "#ffffff",
+      "lineWidth": 1,
+      "lineStyle": "plein"
+    }
+  ],
+  "wallLibrary": [],
+  "objectLibrary": [],
+  "meta": {
+    "title": "test bidet",
+    "units": "cm"
+  }
+}

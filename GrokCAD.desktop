@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=GrokCAD
+Comment=Éditeur CAO 3D — démarre le serveur et ouvre le navigateur
+Exec=bash "/mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh"
+Path=/mnt/Raid4Tb/Program/GrokProjects/GrokCAD
+Icon=applications-graphics
+Terminal=false
+Categories=Graphics;Development;
+StartupNotify=true

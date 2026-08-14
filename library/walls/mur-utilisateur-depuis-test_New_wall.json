@@ -1,0 +1,48 @@
+{
+  "source_document": "/home/red/Téléchargements/test_New_wall.gkd",
+  "wall_style_id": "wstyle_2_msiz1qff",
+  "name": "Mur 1",
+  "note": "Un seul style dans le document. Les offsets sont cumulatifs.",
+  "modele_correct": {
+    "principe": "Un matériau = bande entre DEUX traits. Un trait intermédiaire est partagé.",
+    "lecture": [
+      "Trait 0 (offset 0) : 1ère face — ne devrait PAS avoir de type (géométrie pure).",
+      "Bande 0 → 0.02 : ENDUIT (prio 5) — bornée par traits 0 et 0.02",
+      "Bande 0.02 → 0.18 : BETON (prio 1, ép. 0.16) — traits 0.02 ET 0.18 (0.02 = fin enduit + début béton)",
+      "Bande 0.18 → 0.28 : ISOLANT (prio 3, ép. 0.10) — traits 0.18 ET 0.28 (0.18 = fin béton + début isolant)",
+      "Bande 0.28 → 0.293 : PLACO (prio 5, ép. 0.013) — traits 0.28 ET 0.293 (0.28 = fin isolant + début placo)",
+      "Trait 0.293 : face ext. placo uniquement"
+    ],
+    "prio_raccord_effective_par_trait": {
+      "0.000": "5 (enduit — 1ère bande)",
+      "0.020": "1 (min enduit 5 + béton 1) → face béton",
+      "0.180": "1 (min béton 1 + isolant 3) → face béton",
+      "0.280": "3 (min isolant 3 + placo 5)",
+      "0.293": "5 (placo seul)"
+    }
+  },
+  "stockage_actuel_dans_le_gkd": {
+    "probleme": "Le trait 0 a type=isolant (à tort). La 1ère face ne devrait rien avoir. Les types sur les traits 0.02+ décrivent bien le matériau de la bande fermée.",
+    "lines": [
+      { "offset": 0, "priority": 3, "layerTypeId": "isolant", "commentaire": "INCORRECT — devrait être sans type" },
+      { "offset": 0.02, "priority": 5, "layerTypeId": "enduit", "commentaire": "OK — ferme bande enduit" },
+      { "offset": 0.18, "priority": 1, "layerTypeId": "structure-beton", "commentaire": "OK — ferme bande béton (ép. 0.16)" },
+      { "offset": 0.28, "priority": 3, "layerTypeId": "isolant", "commentaire": "OK — ferme bande isolant" },
+      { "offset": 0.293, "priority": 5, "layerTypeId": "placo-13", "commentaire": "OK — ferme bande placo" }
+    ]
+  },
+  "wallLibrary_raw": [
+    {
+      "id": "wstyle_2_msiz1qff",
+      "name": "Mur 1",
+      "tab": "Général",
+      "lines": [
+        { "offset": 0, "color": "#ffffff", "lineWidth": 1, "lineStyle": "plein", "priority": 3, "layerTypeId": "isolant" },
+        { "offset": 0.02, "color": "#ffffff", "lineWidth": 1, "lineStyle": "plein", "priority": 5, "layerTypeId": "enduit" },
+        { "offset": 0.18, "color": "#ffffff", "lineWidth": 1, "lineStyle": "plein", "priority": 1, "layerTypeId": "structure-beton" },
+        { "offset": 0.28, "color": "#ffffff", "lineWidth": 1, "lineStyle": "plein", "priority": 3, "layerTypeId": "isolant" },
+        { "offset": 0.29300000000000004, "color": "#ffffff", "lineWidth": 1, "lineStyle": "plein", "priority": 5, "layerTypeId": "placo-13" }
+      ]
+    }
+  ]
+}
