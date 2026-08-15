@@ -6,17 +6,73 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.24.9**
+**Version courante : 0.24.15**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.24.9
+# → http://localhost:5173/  ·  titre GrokCad v.0.24.15
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
+
+---
+
+## Session 2026-08-15 — `/corner` + L flip [ALT] (→ **0.24.15**)
+
+- **`/corner`** (`/coin`) : 2 clics, **toujours un L**, jamais un T. Un mur long qui « passe devant » est coupé au coin. Si les 2 murs se croisent (X), le clic sur chacun choisit le quadrant à garder.
+- L avec un mur `[ALT]` : le offset-polyligne mettait les couches à l’envers. Appariement extérieur→intérieur du L.
+- **`/paral 1.2`** : désigner un objet, clic = côté, copie à 1,2 u., enchaîne jusqu’à Échap. `/help` à jour (toutes les commandes).
+
+---
+
+## Session 2026-08-15 — micro-trous peigne (→ **0.24.14**)
+
+Après ouverture de la barre, un hit du pied (placo / face0) restait 8–12 mm avant le remnant. Recalage du bout de barre sur le hit (max 4 cm), sans changer le BIM.
+
+---
+
+## Session 2026-08-15 — trim perp + Y ouvre les 2 bras (→ **0.24.13**)
+
+`/trim` étape 2 : n’importe quel clic gauche, même loin — la **perpendiculaire** donne le point de coupe. Si le pied tombe hors du trait : *« point hors de l’objet »*.
+
+`/jonction` Y : le peigne ouvrait la barre aux offsets théoriques du pied (souvent *à gauche* du L). Désormais les ouvertures se font aux **hits réels**, y compris sur l’autre bras du L, pour que béton↔béton se voie.
+
+---
+
+## Session 2026-08-15 — `/openlast` + `/trim` (→ **0.24.12**)
+
+- **`/openlast`** (`/dernier` `/last`) : rouvre le dernier `.GKD` ouvert ou enregistré. Historique de **7** chemins (localStorage `grokcad.app.recentFiles`), un même fichier n’apparaît qu’une fois (remonté en tête). Fichier manquant → retiré, on essaie le suivant.
+- **`/trim`** (`/ajuster` `/tr`) : 1) objet 2) endroit 3) côté à garder (aperçu). Ligne, arc, mur, polyligne **ouverte**. Refus : polyligne/polymur fermé, instance library.
+
+---
+
+## Session 2026-08-15 — `/jonction` Y ne casse plus le L (→ **0.24.11**)
+
+`/jonction` attirait le 45° dans le coin du L (snap 65 cm) et traitait les 3 murs comme une étoile : axes du L déplacés, onglet détruit, couches en trou.
+
+Désormais : si un L est déjà collé et que la 1ʳᵉ intersection d’axes du 3ᵉ mur n’est **pas** le coin, ce mur reste un **pied** (T/BIM). Le L ne se raccorde qu’entre soi. Tol. de nœud après snap plafonnée à 8 cm.
+
+---
+
+## Session 2026-08-15 — BIM priorités restauré (→ **0.24.10**)
+
+Le 0.24.9 forçait une **butée d’enveloppe** dès qu’un T/`/join` touchait une barre déjà en L (Y, cadre U, T mid sur un L). Toutes les couches s’arrêtaient sur la face ext. : le béton (1) ne rejoignait pas le béton, l’isolant (3) laissait un vide, le placo (5) traversait visuellement le noyau.
+
+Désormais, **chaque trait** :
+
+1. choisit le mur du L dont il rencontre l’enveloppe en premier ;
+2. applique le BIM **sur ce mur seul** — prio P traverse seulement prio > P.
+
+| Couche | Comportement |
+|--------|----------------|
+| Structure béton (1) | rejoint le béton d’entrée du mur rencontré |
+| Isolant (3) | rejoint l’isolant s’il n’a pas à traverser le béton ; sinon **stop net** contre la face béton (pas de vide) |
+| Placo / enduit (5) | stop à la 1ʳᵉ face ≤ 5 (enduit ou béton) |
+
+`/join` + `[ALT]` (flip) et T depuis la face 0 : même règles. Un mur collé à l’autre bout de la barre n’est plus un obstacle.
 
 ---
 
@@ -155,7 +211,7 @@ Revue `/jonction` + `/join` : bugs de snap T/Y, peigne, zone L, stratégie Y/N.
 
 ## Checklist reprise 30 s
 
-1. `lancer-GrokCad.sh` → **GrokCad v.0.24.9**
+1. `lancer-GrokCad.sh` → **GrokCad v.0.24.15**
 2. Smoke texte : `/txt Cuisine` · `/rect` + Shift · `/textbox`
 3. Smoke cote : `/cote` (2+ segments, Échap, sélection texte seul, `/m1` ligne vs texte)
 4. Smoke move : `/move` et `/m1` avec **[Shift]** H/45°/V
@@ -224,6 +280,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 | `/join` peigne bandes / béton / peaux ext. | **validé UI** | **0.22.4–0.22.5** |
 | `/dist` mesure 2 points | **fait** | **0.22.5** |
 | `/grid` on\|off · `/gridsnap` on\|off | **prochaine session** | — |
+| `/join` + `/jonction` Y : BIM priorités (béton↔béton, isolant stop net) | **OK** | **0.24.10** |
 | `/jonction` T/Y multi-extrémités (cadre) | partiel | 0.18.x |
 | `/extrude` · Undo | pas commencé | — |
 

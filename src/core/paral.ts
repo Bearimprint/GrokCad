@@ -153,6 +153,33 @@ export function findNearestDesignatable(
 }
 
 /**
+ * Translation perpendiculaire à distance fixe (`/paral 1.2`).
+ * Le clic indique uniquement le côté.
+ */
+export function offsetParalTranslation(
+  entity: Designatable,
+  designateClick: Vec3,
+  sideClick: Vec3,
+  distance: number,
+): Vec3 | null {
+  const G = Math.abs(distance);
+  if (G < EPS) return null;
+  if (entity.kind === 'wall') {
+    return wallClearanceTranslation(entity, designateClick, sideClick, G);
+  }
+  if (entity.kind === 'line') {
+    return lineOffsetAtDistance(entity.start, entity.end, sideClick, G);
+  }
+  if (entity.kind === 'helper') {
+    return helperOffsetAtDistance(entity, sideClick, G);
+  }
+  if (entity.kind === 'arc' || entity.kind === 'circle') {
+    return radialArcAtDistance(entity, sideClick, G);
+  }
+  return null;
+}
+
+/**
  * Translation pour une copie parallèle en mode libre (2ᵉ clic = côté + distance).
  */
 export function freeParalTranslation(
@@ -384,6 +411,52 @@ function clampAngleToArc(ang: number, a0: number, a1: number): number {
     return d0 < d1 ? a0 : a1;
   }
   return a;
+}
+
+function lineOffsetAtDistance(
+  start: Vec3,
+  end: Vec3,
+  sideClick: Vec3,
+  distance: number,
+): Vec3 | null {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const L = Math.hypot(dx, dy);
+  if (L < EPS) return null;
+  const nx = -dy / L;
+  const ny = dx / L;
+  const signed = (sideClick[0] - start[0]) * nx + (sideClick[1] - start[1]) * ny;
+  const side = Math.sign(signed);
+  if (side === 0) return null;
+  return [nx * side * distance, ny * side * distance, 0];
+}
+
+function helperOffsetAtDistance(
+  h: HelperLineEntity,
+  sideClick: Vec3,
+  distance: number,
+): Vec3 | null {
+  const near = closestOnInfinite(h.origin, h.direction, sideClick);
+  const vx = sideClick[0] - near.point[0];
+  const vy = sideClick[1] - near.point[1];
+  const L = Math.hypot(vx, vy);
+  if (L < EPS) return null;
+  return [(vx / L) * distance, (vy / L) * distance, 0];
+}
+
+function radialArcAtDistance(
+  e: ArcEntity | CircleEntity,
+  sideClick: Vec3,
+  distance: number,
+): Vec3 | null {
+  const dx = sideClick[0] - e.center[0];
+  const dy = sideClick[1] - e.center[1];
+  const L = Math.hypot(dx, dy);
+  if (L < EPS) return null;
+  const ux = dx / L;
+  const uy = dy / L;
+  const outward = L >= e.radius - EPS ? 1 : -1;
+  return [ux * outward * distance, uy * outward * distance, 0];
 }
 
 function lineOffsetTranslation(start: Vec3, end: Vec3, place: Vec3): Vec3 | null {

@@ -3,6 +3,7 @@
  */
 import {
   applyJoinWallsToEntities,
+  cornerWallToWall,
   joinWallToWall,
   wallEntityStrokes,
 } from '../src/core/walls.ts';
@@ -214,6 +215,169 @@ console.log('  OK L');
     process.exit(1);
   }
   console.log('  OK miter L du pied survit au T mid');
+}
+
+// T mid sur une barre qui forme déjà un L : extraBars ne doit PAS
+// forcer une butée d’enveloppe (les couches gardent le BIM).
+{
+  const v = wall('lv', [0, 2, 0], [0, 0, 0]);
+  const h = wall('lh', [0, 0, 0], [4, 0, 0]);
+  const stem = wall('st', [2, 1.2, 0], [2, 0.4, 0]);
+  const afterL = applyJoinWallsToEntities([v, h] as Entity[], 'lv', 'lh', {
+    which: 'end',
+  });
+  const afterT = applyJoinWallsToEntities(
+    [...afterL.entities, stem],
+    'st',
+    'lh',
+    { which: 'end' },
+  );
+  if (!afterT.result.ok || afterT.result.mode !== 'T') {
+    console.error('FAIL T sur barre de L', afterT.result);
+    process.exit(1);
+  }
+  const st = afterT.entities.find((e) => e.id === 'st') as WallEntity;
+  const ssT = wallEntityStrokes(st);
+  const beton = nearEnd(ssT, 0.18, [2, 0]);
+  const isoT = nearEnd(ssT, 0.28, [2, 0]);
+  // Approche depuis +Y = côté offsets de lh (haut) → entrée béton = 0.18, y≈0.18
+  if (Math.abs(beton[1] - 0.18) > 0.04) {
+    console.error('FAIL T-sur-L béton →', beton, 'attendu y≈0.18 (pas enveloppe 0)');
+    process.exit(1);
+  }
+  // Isolant rejoint isolant (0.28) sans traverser le béton
+  if (Math.abs(isoT[1] - 0.28) > 0.04) {
+    console.error('FAIL T-sur-L isolant →', isoT, 'attendu y≈0.28 (jumelle)');
+    process.exit(1);
+  }
+  console.log('  OK T sur barre d’un L : BIM (béton→béton, isolant→isolant)');
+}
+
+// /join avec flip [ALT] : offsets inversés, le BIM reste côté d’attache
+{
+  const bar = wall('bf', [0, -2, 0], [0, 2, 0]);
+  const stemF: WallEntity = {
+    ...wall('sf', [-3, 0.3, 0], [-0.5, 0.3, 0]),
+    flip: true,
+  };
+  const { entities: entF, result: resF } = applyJoinWallsToEntities(
+    [stemF, bar] as Entity[],
+    'sf',
+    'bf',
+    { which: 'end' },
+  );
+  if (!resF.ok || resF.mode !== 'T') {
+    console.error('FAIL T flip', resF);
+    process.exit(1);
+  }
+  const sf = entF.find((e) => e.id === 'sf') as WallEntity;
+  const sfs = wallEntityStrokes(sf);
+  const f18 = nearEnd(sfs, 0.18, [0, 0.3]);
+  if (Math.abs(f18[0] + 0.18) > 0.05) {
+    console.error('FAIL T flip béton →', f18, 'attendu x≈-0.18');
+    process.exit(1);
+  }
+  console.log('  OK T avec flip [ALT] : béton → face entrée');
+}
+
+// Approche depuis la face 0 (extérieur) : béton traverse l’enduit, isolant
+// s’arrête contre le béton (pas de vide jusqu’à l’enveloppe).
+{
+  const bar = wall('bo', [0, -2, 0], [0, 2, 0]);
+  // Pied à x=+0.5 (côté face 0 de la barre, offsets vers −X)
+  const stem = wall('so', [3, 0.3, 0], [0.5, 0.3, 0]);
+  const { entities: entO, result: resO } = applyJoinWallsToEntities(
+    [stem, bar] as Entity[],
+    'so',
+    'bo',
+    { which: 'end' },
+  );
+  if (!resO.ok || resO.mode !== 'T') {
+    console.error('FAIL T face0', resO);
+    process.exit(1);
+  }
+  const so = entO.find((e) => e.id === 'so') as WallEntity;
+  const sos = wallEntityStrokes(so);
+  const o18 = nearEnd(sos, 0.18, [0, 0.3]);
+  const o28 = nearEnd(sos, 0.28, [0, 0.3]);
+  // Face entrée béton depuis face0 = offset 0.02 → x≈-0.02
+  if (Math.abs(o18[0] + 0.02) > 0.05) {
+    console.error('FAIL T face0 béton →', o18, 'attendu x≈-0.02');
+    process.exit(1);
+  }
+  if (Math.abs(o28[0] + 0.02) > 0.05) {
+    console.error('FAIL T face0 isolant vide →', o28, 'attendu stop béton x≈-0.02');
+    process.exit(1);
+  }
+  console.log('  OK T depuis face 0 : béton+isolant stoppent sur béton entrée');
+}
+
+// /corner : 2 murs qui ne se touchent pas → L au croisement des axes
+{
+  const a = wall('ca', [0, 0.4, 0], [1.2, 0.4, 0]);
+  const b = wall('cb', [2, 0, 0], [2, 1.5, 0]);
+  const r = cornerWallToWall(a, [0.2, 0.4, 0], b, [2, 1.2, 0]);
+  if (!r.ok) {
+    console.error('FAIL corner gap', r);
+    process.exit(1);
+  }
+  const aEnd = r.a.start[0] === 0 ? r.a.end : r.a.start;
+  if (Math.abs(aEnd[0] - 2) > 1e-6 || Math.abs(aEnd[1] - 0.4) > 1e-6) {
+    console.error('FAIL corner A pas sur P', r.a.start, r.a.end);
+    process.exit(1);
+  }
+  console.log('  OK /corner murs séparés → coin en (2, 0.4)');
+}
+
+// /corner X : le clic choisit le quadrant
+{
+  const a = wall('xa', [-2, 0, 0], [2, 0, 0]);
+  const b = wall('xb', [0, -2, 0], [0, 2, 0]);
+  const r = cornerWallToWall(a, [-1, 0, 0], b, [0, 1, 0]);
+  if (!r.ok) {
+    console.error('FAIL corner X', r);
+    process.exit(1);
+  }
+  // A garde x<=0, B garde y>=0
+  const aXs = [r.a.start[0]!, r.a.end[0]!];
+  const bYs = [r.b.start[1]!, r.b.end[1]!];
+  if (Math.max(...aXs) > 0.01 || Math.min(...bYs) < -0.01) {
+    console.error('FAIL quadrant X', r.a, r.b);
+    process.exit(1);
+  }
+  console.log('  OK /corner X : clic = quadrant (ouest + nord)');
+}
+
+// L flip mixte : les couches se rejoignent (pas de butée ratée)
+{
+  const a = wall('fa', [0, 0, 0], [2, 0, 0]);
+  const b: WallEntity = { ...wall('fb', [0, 0, 0], [0, 2, 0]), flip: true };
+  const { entities } = applyJoinWallsToEntities([a, b] as Entity[], 'fa', 'fb', {
+    which: 'start',
+  });
+  const aa = entities.find((e) => e.id === 'fa') as WallEntity;
+  const bb = entities.find((e) => e.id === 'fb') as WallEntity;
+  const ssA = wallEntityStrokes(aa);
+  const ssB = wallEntityStrokes(bb);
+  let maxGap = 0;
+  for (const sa of ssA) {
+    const ea = sa.points.reduce((best, p) =>
+      Math.hypot(p[0], p[1]) < Math.hypot(best[0], best[1]) ? p : best,
+    );
+    let best = Infinity;
+    for (const sb of ssB) {
+      for (const p of sb.points) {
+        const d = Math.hypot(p[0] - ea[0], p[1] - ea[1]);
+        if (d < best) best = d;
+      }
+    }
+    if (best > maxGap) maxGap = best;
+  }
+  if (maxGap > 0.03) {
+    console.error('FAIL L flip mixte gap', maxGap);
+    process.exit(1);
+  }
+  console.log('  OK L flip [ALT] : couches se rejoignent (gap', maxGap.toFixed(4), 'm)');
 }
 
 console.log('\nPASS /join');

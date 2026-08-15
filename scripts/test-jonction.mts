@@ -602,26 +602,25 @@ let failed = 0;
   } else {
     console.log('  OK face0/enduit → vertical du L');
   }
-  // Y dans un L : butée sur la face extérieure (x≈-4.672), pas le béton à -4.652.
-  const face02OnVOuter = Math.abs(face02[0] + 4.672) < 0.03;
-  if (!face02OnVOuter) {
+  // Face 0.02 = béton (jp 1) : rejoint le béton du vertical (x≈-4.652), pas l’enveloppe.
+  const face02OnVBeton = Math.abs(face02[0] + 4.652) < 0.03;
+  if (!face02OnVBeton) {
     console.log(
-      `  FAIL face 0.02 sur (${face02[0].toFixed(3)},${face02[1].toFixed(3)}) (attendu face ext. V x≈-4.672)`,
+      `  FAIL face 0.02 sur (${face02[0].toFixed(3)},${face02[1].toFixed(3)}) (attendu béton V x≈-4.652)`,
     );
     failed += 1;
   } else {
-    console.log('  OK face 0.02 → face extérieure du vertical');
+    console.log('  OK face 0.02 → béton du vertical');
   }
-  // Isolant (prio 3) s’arrête au béton de la barre (y=-1.317 ou -1.477)
-  const isoOnBeton =
-    Math.abs(iso[1] + 1.317) < 0.06 || Math.abs(iso[1] + 1.477) < 0.06;
+  // Isolant (prio 3) s’arrête net contre le béton d’entrée (y≈-1.477), sans vide
+  const isoOnBeton = Math.abs(iso[1] + 1.477) < 0.04;
   // Placo s’arrête à l’enduit (1ʳᵉ face y≈-1.497)
   const plaOnEnduit = Math.abs(pla[1] + 1.497) < 0.06;
   if (!isoOnBeton) {
-    console.log(`  FAIL isolant y=${iso[1]?.toFixed(3)} (attendu béton ≈-1.32)`);
+    console.log(`  FAIL isolant y=${iso[1]?.toFixed(3)} (attendu béton entrée ≈-1.477)`);
     failed += 1;
   } else {
-    console.log('  OK isolant → béton (stop, pas d’onglet)');
+    console.log('  OK isolant → béton (stop net, pas de vide)');
   }
   if (!plaOnEnduit) {
     console.log(`  FAIL placo y=${pla[1]?.toFixed(3)} (attendu enduit ≈-1.50)`);
@@ -630,15 +629,101 @@ let failed = 0;
     console.log('  OK placo → enduit (stop, pas d’onglet)');
   }
   const mid = nearLayer(0.18);
-  const midOnH = Math.abs(mid[1] + 1.497) < 0.08 || Math.abs(mid[1] + 1.477) < 0.08;
-  const midNotCorner = Math.abs(mid[0] + 4.652) > 0.04 || midOnH;
-  if (!midOnH) {
+  const midOnHBeton = Math.abs(mid[1] + 1.477) < 0.04;
+  if (!midOnHBeton) {
     console.log(
-      `  FAIL béton 0.18 sur (${mid[0].toFixed(3)},${mid[1].toFixed(3)}) (trou au coin)`,
+      `  FAIL béton 0.18 sur (${mid[0].toFixed(3)},${mid[1].toFixed(3)}) (attendu béton H y≈-1.477)`,
     );
     failed += 1;
   } else {
-    console.log('  OK béton 0.18 → horizontal (pas de trou)');
+    console.log('  OK béton 0.18 → béton de l’horizontal');
+  }
+}
+
+// ─── Y déjà sur l’axe H à 31 cm du coin : ne PAS attirer au coin ───────────
+{
+  console.log('TEST /jonction Y-sur-axe — L intact, pied pas collé au coin');
+  const profile: WallLineDef[] = [
+    { offset: 0, color: '#a', lineWidth: 1, lineStyle: 'plein' },
+    { offset: 0.02, color: '#b', lineWidth: 1, lineStyle: 'plein', priority: 5, layerTypeId: 'enduit' },
+    { offset: 0.18, color: '#c', lineWidth: 2, lineStyle: 'plein', priority: 1, layerTypeId: 'structure-beton' },
+    { offset: 0.28, color: '#d', lineWidth: 1, lineStyle: 'plein', priority: 3, layerTypeId: 'isolant' },
+    { offset: 0.293, color: '#e', lineWidth: 1, lineStyle: 'plein', priority: 5, layerTypeId: 'placo-13' },
+  ];
+  const mk = (
+    id: string,
+    start: [number, number, number],
+    end: [number, number, number],
+  ): WallEntity => ({
+    id,
+    kind: 'wall',
+    layer: 'MURS',
+    styleId: 's',
+    path: 'line',
+    flip: false,
+    lines: profile.map((l) => ({ ...l })),
+    start,
+    end,
+  });
+  const v = mk('jv', [-4.672, 1.027, 0], [-4.672, -1.497, 0]);
+  const h = mk('jh', [-4.672, -1.497, 0], [-0.839, -1.497, 0]);
+  const d = mk('jd', [-4.984, -1.497, 0], [-7.097, -2.825, 0]);
+  const box = { minX: -7.2, minY: -3.0, maxX: -3.5, maxY: 0.4 };
+  const { entities: next, maxNodeDegree } = snapAndRejoinWallsInBox(
+    [v, h, d],
+    box,
+    0.65,
+  );
+  const vv = next.find((e): e is WallEntity => e.id === 'jv')!;
+  const hh = next.find((e): e is WallEntity => e.id === 'jh')!;
+  const dd = next.find((e): e is WallEntity => e.id === 'jd')!;
+  const vCorner =
+    Math.hypot(vv.end[0]! + 4.672, vv.end[1]! + 1.497) < 0.02 ||
+    Math.hypot(vv.start[0]! + 4.672, vv.start[1]! + 1.497) < 0.02;
+  const hCorner =
+    Math.hypot(hh.start[0]! + 4.672, hh.start[1]! + 1.497) < 0.02 ||
+    Math.hypot(hh.end[0]! + 4.672, hh.end[1]! + 1.497) < 0.02;
+  const dOnH =
+    Math.abs(dd.start[1]! + 1.497) < 0.04 || Math.abs(dd.end[1]! + 1.497) < 0.04;
+  const dNotAtCorner =
+    Math.hypot(dd.start[0]! + 4.672, dd.start[1]! + 1.497) > 0.15 &&
+    Math.hypot(dd.end[0]! + 4.672, dd.end[1]! + 1.497) > 0.15;
+  if (!vCorner || !hCorner) {
+    console.log(
+      `  FAIL L déplacé V=${vv.start}→${vv.end} H=${hh.start}→${hh.end}`,
+    );
+    failed += 1;
+  } else if (!dOnH || !dNotAtCorner) {
+    console.log(
+      `  FAIL pied attiré au coin start=${dd.start.map((x) => x.toFixed(3))} (degré=${maxNodeDegree})`,
+    );
+    failed += 1;
+  } else {
+    console.log('  OK L intact, pied reste sur l’horizontal');
+  }
+  const dNear = (off: number): [number, number] => {
+    const g = (dd.strokeGeom ?? []).find((x) => Math.abs(x.offset - off) < 1e-9);
+    if (!g) return [NaN, NaN];
+    return g.start[1]! > g.end[1]!
+      ? [g.start[0]!, g.start[1]!]
+      : [g.end[0]!, g.end[1]!];
+  };
+  const d02 = dNear(0.02);
+  const d18 = dNear(0.18);
+  const d28 = dNear(0.28);
+  const betonOk =
+    Math.abs(d02[0] + 4.652) < 0.04 || Math.abs(d18[1] + 1.477) < 0.04;
+  const isoOk = Math.abs(d28[1] + 1.477) < 0.05;
+  if (!betonOk) {
+    console.log(
+      `  FAIL béton pied 0.02=(${d02[0].toFixed(3)},${d02[1].toFixed(3)}) 0.18=(${d18[0].toFixed(3)},${d18[1].toFixed(3)})`,
+    );
+    failed += 1;
+  } else if (!isoOk) {
+    console.log(`  FAIL isolant y=${d28[1]?.toFixed(3)} (attendu stop béton ≈-1.477)`);
+    failed += 1;
+  } else {
+    console.log('  OK BIM pied : béton→béton, isolant stop net');
   }
 }
 

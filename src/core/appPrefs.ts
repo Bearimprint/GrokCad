@@ -31,7 +31,20 @@ export interface AppPrefsFile {
    * Chemin absolu disque ; utilisé comme départ de l’explorateur.
    */
   lastOpenDir?: string;
+  /**
+   * 7 derniers fichiers ouverts / enregistrés (chemin absolu).
+   * Un même fichier n’apparaît qu’une fois (remonté en tête).
+   */
+  recentFiles?: RecentFileEntry[];
 }
+
+/** Entrée de l’historique fichiers (/openlast). */
+export interface RecentFileEntry {
+  path: string;
+  name: string;
+}
+
+export const RECENT_FILES_MAX = 7;
 
 export const APP_STORAGE_KEY = 'grokcad.app';
 export const DEFAULT_SNAP_RADIUS_PX = 20;
@@ -74,7 +87,43 @@ function normalize(raw: unknown): AppPrefsFile {
   ) {
     base.lastOpenDir = o.lastOpenDir.trim();
   }
+  if (Array.isArray(o.recentFiles)) {
+    const seen = new Set<string>();
+    const recent: RecentFileEntry[] = [];
+    for (const raw of o.recentFiles) {
+      const e = normalizeRecentEntry(raw);
+      if (!e || seen.has(e.path)) continue;
+      seen.add(e.path);
+      recent.push(e);
+      if (recent.length >= RECENT_FILES_MAX) break;
+    }
+    if (recent.length > 0) base.recentFiles = recent;
+  }
   return base;
+}
+
+function normalizeRecentEntry(raw: unknown): RecentFileEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Partial<RecentFileEntry>;
+  const path = typeof o.path === 'string' ? o.path.trim() : '';
+  if (!path) return null;
+  const name =
+    (typeof o.name === 'string' && o.name.trim()) ||
+    path.split('/').filter(Boolean).pop() ||
+    path;
+  return { path, name };
+}
+
+/** Ajoute un chemin en tête (dédupliqué, max `max`). */
+export function pushRecentFile(
+  list: readonly RecentFileEntry[],
+  path: string,
+  max = RECENT_FILES_MAX,
+): RecentFileEntry[] {
+  const p = path.trim();
+  if (!p) return list.map((e) => ({ ...e }));
+  const name = p.split('/').filter(Boolean).pop() ?? p;
+  return [{ path: p, name }, ...list.filter((f) => f.path !== p)].slice(0, max);
 }
 
 export function clampSnapPx(n: number): number {
@@ -131,6 +180,16 @@ export class AppPrefsManager {
     return d && d.length > 0 ? d : null;
   }
 
+  /** Historique des fichiers (le plus récent en premier). */
+  get recentFiles(): readonly RecentFileEntry[] {
+    return this.prefs.recentFiles ?? [];
+  }
+
+  /** Dernier fichier ouvert / enregistré, ou null. */
+  get lastRecentFile(): RecentFileEntry | null {
+    return this.prefs.recentFiles?.[0] ?? null;
+  }
+
   onChange(fn: AppPrefsListener): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
@@ -180,6 +239,36 @@ export class AppPrefsManager {
     }
     if (this.prefs.lastOpenDir === d) return;
     this.prefs.lastOpenDir = d;
+    this.emit();
+  }
+
+  /**
+   * Mémorise un fichier ouvert / enregistré.
+   * Le même chemin n’apparaît qu’une fois (remonté en tête), max 7.
+   */
+  rememberFile(path: string | null | undefined): void {
+    const p = path?.trim() ?? '';
+    if (!p) return;
+    const next = pushRecentFile(this.prefs.recentFiles ?? [], p);
+    const prev = this.prefs.recentFiles ?? [];
+    const same =
+      prev.length === next.length &&
+      prev.every((e, i) => e.path === next[i]!.path && e.name === next[i]!.name);
+    if (same) return;
+    this.prefs.recentFiles = next;
+    const dir = p.replace(/\/+$/, '').replace(/\/[^/]+$/, '') || '/';
+    if (dir && dir !== p) this.prefs.lastOpenDir = dir;
+    this.emit();
+  }
+
+  /** Retire un chemin de l’historique (fichier manquant). */
+  forgetFile(path: string): void {
+    const p = path.trim();
+    if (!p || !this.prefs.recentFiles?.length) return;
+    const next = this.prefs.recentFiles.filter((f) => f.path !== p);
+    if (next.length === this.prefs.recentFiles.length) return;
+    if (next.length === 0) delete this.prefs.recentFiles;
+    else this.prefs.recentFiles = next;
     this.emit();
   }
 }

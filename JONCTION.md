@@ -2,7 +2,7 @@
 
 > Doc technique pour reprendre sans re-expliquer.  
 > Code : `src/core/walls.ts` → `resolveStarNodeStrokes`, `snapAndRejoinWallsInBox`, `joinWallToWall`.  
-> Version de référence : **0.24.9** (Y dans un L : butée sur la face extérieure du mur rencontré).
+> Version de référence : **0.24.11** (Y dans un L : le L reste un L ; le pied fait le BIM).
 
 ---
 
@@ -21,9 +21,10 @@ Ne remplace pas `/jonction` (cadre multi-extrémités) : les deux coexistent.
 Algo : `joinWallToWall` (allonge l’axe) + `joinStemToBarPeigne` (**priorités + découpe peaux ext.**) :
 - le **pied** : first-hit selon `priority` —
   - prio P traverse prio **> P** ; stop prio **≤ P** (1ʳᵉ rencontre) ;
-  - même prio + même `layerTypeId` (isolant↔isolant) : on continue jusqu’au béton/jumelle ;
+  - même prio + même `layerTypeId` (isolant↔isolant) : joint la jumelle (sans traverser un prio ≤ P) ;
   - même prio + type différent (enduit↔placo) : stop (face ext.) ;
-  - béton (1) → béton ;
+  - béton (1) → béton d’entrée (ne traverse pas l’épaisseur) ;
+  - Y dans un L : 1ʳᵉ enveloppe = quel mur, puis BIM **sur ce mur seul** ;
 - la **barre** : peaux **extérieures** à la structure **coupées** dans la bande du pied ;
   structure + face lointaine **continues**.
 

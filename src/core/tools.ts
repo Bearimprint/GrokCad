@@ -1,5 +1,13 @@
 import { applyCut, findNearestCuttable } from './cut';
 import {
+  applyTrim,
+  findNearestTrimCandidate,
+  projectPerpOnObject,
+  sideToKeep,
+  trimPreviewStrokes,
+  type TrimHit,
+} from './trim';
+import {
   applyExtend,
   findNearestBoundary,
   findNearestExtendable,
@@ -58,6 +66,7 @@ import {
   findNearestDesignatable,
   freeParalTranslation,
   makeParalCopies,
+  offsetParalTranslation,
   type Designatable,
   type ParalDelta,
 } from './paral';
@@ -87,6 +96,7 @@ import {
   polyWallStart,
   saveJonctionPref,
   applyJoinWallsToEntities,
+  applyCornerWallsToEntities,
   findNearestWall,
   WALL_JOIN_TOL,
   wallEntityStrokes,
@@ -138,7 +148,9 @@ export type ToolKind =
   | 'stretch'
   | 'rejoin'
   | 'join'
+  | 'corner'
   | 'cut'
+  | 'trim'
   | 'extend'
   | 'fill'
   | 'delh'
@@ -219,6 +231,8 @@ export class DrawingTools {
   private placeName: string | null = null;
   /** /paral */
   private paralDeltas: ParalDelta[] | null = null;
+  /** /paral 1.2 — décalage perpendiculaire fixe (unités doc). */
+  private paralOffset: number | null = null;
   private paralTarget: Designatable | null = null;
   private paralDesignatePt: Vec3 | null = null;
   /**
@@ -237,6 +251,9 @@ export class DrawingTools {
   private stretchBox: Aabb2 | null = null;
   /** /extend — objet à allonger (1er clic). */
   private extendSource: ExtendSourceHit | null = null;
+  /** /trim — objet + point de coupe. */
+  private trimTarget: TrimHit | null = null;
+  private trimCut: Vec3 | null = null;
   /**
    * /jonction — phase confirmation Y/N (T/Y, degré ≥ 3).
    * step 0–1 = cadre ; step 2 = choisir solution.
@@ -252,6 +269,8 @@ export class DrawingTools {
    * /join — 1er mur (à prolonger) : id + clic (choix d’extrémité).
    */
   private joinStem: { wallId: string; click: Vec3 } | null = null;
+  /** /corner — 1er mur + clic (côté à garder). */
+  private cornerFirst: { wallId: string; click: Vec3 } | null = null;
 
   constructor(
     private doc: CadDocument,
@@ -827,6 +846,24 @@ export class DrawingTools {
   }
 
   /**
+   * /trim — 1) objet  2) endroit  3) côté à garder.
+   * Ligne / arc / mur / polyligne ouverte. Pas d’objet library ni pline fermée.
+   */
+  startTrim(): void {
+    this.resetState();
+    this.kind = 'trim';
+    this.trimTarget = null;
+    this.trimCut = null;
+    this.step = 0;
+    this.viewport.setPickHandler((pt) => this.onTrimPoint(pt));
+    const px = this.viewport.snapRadiusPx();
+    this.feedback(
+      `TRIM — 1) objet à couper (ligne / arc / mur / polyligne ouverte, ≤ ${px} px)… Échap = fin`,
+      'info',
+    );
+  }
+
+  /**
    * /extend — prolonge une ligne/arc (ou bout de polyligne ouverte)
    * jusqu’à une limite (ligne / arc / cercle).
    * 1) objet à allonger  2) limite. Enchaîne jusqu’à Échap.
@@ -1152,22 +1189,49 @@ export class DrawingTools {
   }
 
   /**
+   * /corner — coin L forcé (jamais T), 2 clics.
+   * Le clic sur chaque mur = côté à garder si les murs se croisent.
+   */
+  startCorner(): void {
+    this.resetState();
+    this.kind = 'corner';
+    this.cornerFirst = null;
+    this.viewport.setPickHandler((pt) => this.onCornerPoint(pt));
+    const px = this.viewport.snapRadiusPx();
+    this.feedback(
+      `CORNER — 1) 1er mur (clic du côté à garder, ≤ ${px} px)… Échap = fin`,
+      'info',
+    );
+  }
+
+  /**
    * /paral — copie parallèle d’un élément **désigné** (≠ sélection).
    * Mode continu : la copie devient l’objet désigné ; recliquer pour enchaîner.
    * @param deltas vide = mode libre (désigner → clic placement distance+sens)
    *               sinon deltas D… (désigner → 2ᵉ clic = **sens** uniquement ;
    *               les valeurs dx/dy/dz sont des distances absolues)
    */
-  startParal(deltas: ParalDelta[] = []): void {
+  startParal(deltas: ParalDelta[] = [], offsetDistance?: number): void {
     this.resetState();
     this.kind = 'paral';
     this.paralDeltas = deltas.length > 0 ? deltas : null;
+    this.paralOffset =
+      typeof offsetDistance === 'number' &&
+      Number.isFinite(offsetDistance) &&
+      offsetDistance > 0
+        ? offsetDistance
+        : null;
     this.paralTarget = null;
     this.paralDesignatePt = null;
     this.designation?.clear();
     this.viewport.setPickHandler((pt) => this.onParalPoint(pt));
     const px = this.viewport.snapRadiusPx();
-    if (this.paralDeltas) {
+    if (this.paralOffset != null) {
+      this.feedback(
+        `PARAL ${this.paralOffset} — 1) désignez un élément (≤ ${px} px)  2) clic = côté. Puis recliquer pour enchaîner. Échap = fin`,
+        'info',
+      );
+    } else if (this.paralDeltas) {
       const n = this.paralDeltas.length;
       this.feedback(
         `PARAL — 1) désignez un élément (≤ ${px} px, orange ≠ sélection)  2) clic = sens → ${n} copie(s). Enchaînement auto. Échap = fin`,
@@ -1305,8 +1369,16 @@ export class DrawingTools {
       this.onCutPoint(pt);
       return true;
     }
+    if (this.kind === 'trim') {
+      this.onTrimPoint(pt);
+      return true;
+    }
     if (this.kind === 'extend') {
       this.onExtendPoint(pt);
+      return true;
+    }
+    if (this.kind === 'corner') {
+      this.onCornerPoint(pt);
       return true;
     }
     if (this.kind === 'fill') {
@@ -1464,10 +1536,15 @@ export class DrawingTools {
   updatePreview(): void {
     if (!this.kind) return;
     // /cut · /d · /hx… : pas de rubber-band (effet au clic uniquement)
+    if (this.kind === 'trim') {
+      this.previewTrim();
+      return;
+    }
     if (
       this.kind === 'cut' ||
       this.kind === 'extend' ||
       this.kind === 'join' ||
+      this.kind === 'corner' ||
       this.kind === 'fill' ||
       this.kind === 'delh' ||
       this.kind === 'deletepick' ||
@@ -2261,6 +2338,7 @@ export class DrawingTools {
     else if (this.kind === 'stretch') this.onStretchPoint(pt);
     else if (this.kind === 'rejoin') this.onRejoinPoint(pt);
     else if (this.kind === 'join') this.onJoinPoint(pt);
+    else if (this.kind === 'corner') this.onCornerPoint(pt);
     else if (this.kind === 'placeobj') this.onPlaceObjectPoint(pt);
     else if (this.kind === 'paral') this.onParalPoint(pt);
     else if (this.kind === 'dist') this.onDistPoint(pt);
@@ -2517,6 +2595,61 @@ export class DrawingTools {
     );
   }
 
+  private onCornerPoint(pt: Vec3): void {
+    const maxDist = this.viewport.snapToleranceMeters();
+    const px = this.viewport.snapRadiusPx();
+
+    if (!this.cornerFirst) {
+      const hit = findNearestWall(pt, this.doc.entities, maxDist);
+      if (!hit) {
+        this.feedback(`Aucun mur dans ${px} px.`, 'warn');
+        return;
+      }
+      if (hit.wall.path !== 'line') {
+        this.feedback('CORNER : uniquement murs linéaires (/ml).', 'warn');
+        return;
+      }
+      this.cornerFirst = { wallId: hit.wall.id, click: [...pt] as Vec3 };
+      this.designation?.set([hit.wall.id]);
+      this.feedback(
+        'CORNER — 2) 2ᵉ mur (clic du côté à garder)…',
+        'ok',
+      );
+      return;
+    }
+
+    const idA = this.cornerFirst.wallId;
+    const clickA = this.cornerFirst.click;
+    const hitB = findNearestWall(pt, this.doc.entities, maxDist, idA);
+    if (!hitB) {
+      this.feedback(`Aucun 2ᵉ mur dans ${px} px.`, 'warn');
+      return;
+    }
+    if (hitB.wall.path !== 'line') {
+      this.feedback('CORNER : uniquement murs linéaires (/ml).', 'warn');
+      return;
+    }
+
+    const { entities, result } = applyCornerWallsToEntities(
+      this.doc.entities,
+      idA,
+      clickA,
+      hitB.wall.id,
+      pt,
+    );
+    if (!result.ok) {
+      this.feedback(`CORNER — ${result.reason}`, 'warn');
+      return;
+    }
+    this.doc.replaceAllEntities(entities, { rejoin: false });
+    this.designation?.clear();
+    this.cornerFirst = null;
+    this.feedback(
+      'CORNER — coin créé. Recliquer un 1er mur, ou Échap.',
+      'ok',
+    );
+  }
+
   private onParalPoint(pt: Vec3): void {
     const maxDist = this.viewport.snapToleranceMeters();
 
@@ -2534,9 +2667,37 @@ export class DrawingTools {
       return;
     }
 
-    // Étape 1 : placement (libre) ou sens (mode D…)
+    // Étape 1 : placement (libre), côté (distance fixe) ou sens (mode D…)
     if (!this.paralTarget || !this.paralDesignatePt) {
       this.step = 0;
+      return;
+    }
+
+    if (this.paralOffset != null) {
+      const t = offsetParalTranslation(
+        this.paralTarget,
+        this.paralDesignatePt,
+        pt,
+        this.paralOffset,
+      );
+      if (!t) {
+        this.feedback(
+          'Sens indéterminé — cliquez clairement d’un côté de l’objet.',
+          'warn',
+        );
+        return;
+      }
+      const copies = makeParalCopies(this.paralTarget, [t]);
+      if (copies.length === 0) {
+        this.feedback('Décalage nul — recliquez le côté, Échap = fin.', 'warn');
+        return;
+      }
+      this.doc.addEntities(copies);
+      const chain = this.chainParalToLastCopy(copies, t);
+      this.feedback(
+        `PARAL ${this.paralOffset} — copie à ${this.paralOffset} u. « ${chain?.kind ?? 'copie'} » désigné(e) — recliquez le côté, Échap = fin.`,
+        'ok',
+      );
       return;
     }
 
@@ -2604,7 +2765,12 @@ export class DrawingTools {
     this.step = 1;
     this.designation?.set([entity.id]);
 
-    if (this.paralDeltas && this.paralDeltas.length > 0) {
+    if (this.paralOffset != null) {
+      this.feedback(
+        `PARAL ${this.paralOffset} — « ${entity.kind} » désigné. Cliquez le côté (copie à ${this.paralOffset} u.). Échap = fin`,
+        'ok',
+      );
+    } else if (this.paralDeltas && this.paralDeltas.length > 0) {
       this.feedback(
         `PARAL — « ${entity.kind} » désigné (orange). Cliquez le **sens** (gauche/droite, haut/bas…)… Échap = fin`,
         'ok',
@@ -2667,7 +2833,14 @@ export class DrawingTools {
 
     // Mode D… : aperçu avec distances fixes + sens selon la souris
     let t: Vec3 | null = null;
-    if (this.paralDeltas && this.paralDeltas.length > 0) {
+    if (this.paralOffset != null) {
+      t = offsetParalTranslation(
+        this.paralTarget,
+        this.paralDesignatePt,
+        cur,
+        this.paralOffset,
+      );
+    } else if (this.paralDeltas && this.paralDeltas.length > 0) {
       const ts = deltaParalTranslations(
         this.paralTarget,
         this.paralDesignatePt,
@@ -3778,6 +3951,194 @@ export class DrawingTools {
     }
   }
 
+  private onTrimPoint(pt: Vec3): void {
+    const maxDist = this.viewport.snapToleranceMeters();
+
+    if (this.step === 0) {
+      const cand = findNearestTrimCandidate(pt, this.doc.entities, maxDist);
+      if (!cand) {
+        const near = findNearestEntity(pt, this.doc.entities, maxDist);
+        if (near?.entity.kind === 'object') {
+          this.feedback(
+            'TRIM — pas sur un objet de bibliothèque (exploser d’abord avec /explode).',
+            'warn',
+          );
+        }
+        return;
+      }
+      if (cand.reject === 'closed-poly') {
+        this.feedback(
+          'TRIM — polyligne fermée : pas encore supporté (on ne saurait pas où s’arrête la partie effacée).',
+          'warn',
+        );
+        return;
+      }
+      if (cand.reject === 'closed-wall') {
+        this.feedback(
+          'TRIM — polymur fermé : pas encore supporté.',
+          'warn',
+        );
+        return;
+      }
+      if (cand.reject) return;
+      if (
+        cand.entity.kind !== 'line' &&
+        cand.entity.kind !== 'arc' &&
+        cand.entity.kind !== 'polyline' &&
+        cand.entity.kind !== 'wall'
+      ) {
+        return;
+      }
+      this.trimTarget = {
+        entity: cand.entity,
+        point: cand.point,
+        dist: cand.dist,
+      };
+      this.designation?.set([cand.entity.id]);
+      this.step = 1;
+      this.feedback(
+        'TRIM — 2) clic (même loin) : la perpendiculaire donne l’endroit de la coupe…',
+        'ok',
+      );
+      return;
+    }
+
+    if (this.step === 1) {
+      const target = this.trimTarget;
+      if (!target) {
+        this.step = 0;
+        return;
+      }
+      const live = this.doc.entities.find((e) => e.id === target.entity.id);
+      if (
+        !live ||
+        (live.kind !== 'line' &&
+          live.kind !== 'arc' &&
+          live.kind !== 'polyline' &&
+          live.kind !== 'wall')
+      ) {
+        this.feedback('TRIM — objet disparu.', 'err');
+        this.trimTarget = null;
+        this.step = 0;
+        return;
+      }
+      const proj = projectPerpOnObject(live, pt);
+      if (!proj || !proj.onObject) {
+        this.feedback(
+          'TRIM — point hors de l’objet. Cliquez ailleurs (la perpendiculaire doit tomber sur le trait).',
+          'warn',
+        );
+        return;
+      }
+      this.trimTarget = { entity: live, point: proj.point, dist: dist(proj.point, pt) };
+      this.trimCut = proj.point;
+      this.step = 2;
+      this.feedback(
+        'TRIM — 3) cliquez le côté à garder (l’aperçu suit la souris)…',
+        'ok',
+      );
+      this.previewTrim();
+      return;
+    }
+
+    // step 2 : côté à garder
+    const target = this.trimTarget;
+    const cut = this.trimCut;
+    if (!target || !cut) {
+      this.step = 0;
+      return;
+    }
+    const live = this.doc.entities.find((e) => e.id === target.entity.id);
+    if (
+      !live ||
+      (live.kind !== 'line' &&
+        live.kind !== 'arc' &&
+        live.kind !== 'polyline' &&
+        live.kind !== 'wall')
+    ) {
+      this.feedback('TRIM — objet disparu.', 'err');
+      this.trimTarget = null;
+      this.trimCut = null;
+      this.step = 0;
+      return;
+    }
+    const keep = sideToKeep(live, cut, pt);
+    const result = applyTrim(live, cut, keep);
+    if (!result) {
+      this.feedback('TRIM — coupe trop près d’une extrémité (rien à garder).', 'warn');
+      return;
+    }
+    this.doc.replaceEntity(live.id, [result.entity]);
+    const label =
+      live.kind === 'line'
+        ? 'ligne'
+        : live.kind === 'arc'
+          ? 'arc'
+          : live.kind === 'polyline'
+            ? 'polyligne'
+            : 'mur';
+    this.feedback(
+      `TRIM — ${label} raccourcie (côté ${keep === 'start' ? 'départ' : 'fin'} gardé). Recliquer un objet, ou Échap.`,
+      'ok',
+    );
+    this.trimTarget = null;
+    this.trimCut = null;
+    this.step = 0;
+    this.designation?.clear();
+    this.viewport.setPreviewStrokes(null);
+  }
+
+  private previewTrim(): void {
+    if (this.step === 0) {
+      this.viewport.setPreviewStrokes(null);
+      return;
+    }
+    const m = this.viewport.getMouseWorld();
+    if (!m || !this.trimTarget) {
+      this.viewport.setPreviewStrokes(null);
+      return;
+    }
+    const live = this.doc.entities.find((e) => e.id === this.trimTarget!.entity.id);
+    if (
+      !live ||
+      (live.kind !== 'line' &&
+        live.kind !== 'arc' &&
+        live.kind !== 'polyline' &&
+        live.kind !== 'wall')
+    ) {
+      this.viewport.setPreviewStrokes(null);
+      return;
+    }
+    const cur: Vec3 = [m.x, m.y, m.z];
+
+    if (this.step === 1) {
+      const proj = projectPerpOnObject(live, cur);
+      if (!proj) {
+        this.viewport.setPreviewStrokes(null);
+        return;
+      }
+      const color = proj.onObject ? '#4fc3f7' : '#e57373';
+      this.viewport.setPreviewStrokes([
+        {
+          points: [cur, proj.foot],
+          color,
+          lineWidth: 1,
+          lineStyle: 'tiret',
+        },
+      ]);
+      return;
+    }
+
+    if (this.step !== 2 || !this.trimCut) {
+      this.viewport.setPreviewStrokes(null);
+      return;
+    }
+    const keep = sideToKeep(live, this.trimCut, cur);
+    this.viewport.setPreviewStrokes(
+      trimPreviewStrokes(live, this.trimCut, keep),
+    );
+  }
+
   private onCutPoint(pt: Vec3): void {
     // Rayon = snap courant (px écran) — indépendant du snap on/off
     const maxDist = this.viewport.snapToleranceMeters();
@@ -4728,6 +5089,7 @@ export class DrawingTools {
     this.placeTab = null;
     this.placeName = null;
     this.paralDeltas = null;
+    this.paralOffset = null;
     this.paralTarget = null;
     this.paralDesignatePt = null;
     this.copyMode = null;
@@ -4736,6 +5098,8 @@ export class DrawingTools {
     this.pwallId = null;
     this.stretchBox = null;
     this.extendSource = null;
+    this.trimTarget = null;
+    this.trimCut = null;
     this.rejoinPreEntities = null;
     this.rejoinSnappedEntities = null;
     this.rejoinStrategies = [];
@@ -4744,6 +5108,7 @@ export class DrawingTools {
     this.rejoinWallsInBoxCount = 0;
     this.rejoinClusters = 0;
     this.joinStem = null;
+    this.cornerFirst = null;
     this.pendingText = '';
     this.textBoxed = false;
     this.coteDefPoints = [];

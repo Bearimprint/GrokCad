@@ -30,7 +30,6 @@ import { objectDefCache } from '../core/objectCache';
 import { saveLibraryObject } from '../core/objectLibrary';
 import {
   createAxesHelpers,
-  helperParallelTo,
   helperParallelX,
   helperParallelY,
   helperParallelZ,
@@ -295,9 +294,8 @@ const commands: CommandDef[] = [
         ctx.walls.loadFromDocument(result.doc.wallLibrary ?? []);
         ctx.viewport.applyCameraState(result.doc.camera);
         ctx.setDocTitle(result.name);
-        // Mémoriser le dossier pour le prochain /open
         if (result.path) {
-          ctx.app.setLastOpenDir(dirname(result.path));
+          ctx.app.rememberFile(result.path);
         }
         // Précharger les définitions des instances d'objets
         const objs = result.doc.entities.filter((e) => e.kind === 'object');
@@ -315,6 +313,15 @@ const commands: CommandDef[] = [
       } catch (e) {
         ctx.feedback(e instanceof Error ? e.message : String(e), 'err');
       }
+    },
+  },
+  {
+    name: 'openlast',
+    aliases: ['ouvrirdernier', 'last', 'reopen', 'dernier'],
+    summary:
+      'Ouvre le dernier fichier ouvert / enregistré (historique de 7, sans doublon)',
+    run: async (ctx) => {
+      await runOpenLast(ctx);
     },
   },
   {
@@ -683,8 +690,8 @@ const commands: CommandDef[] = [
     name: 'paral',
     aliases: ['parallele', 'parallel', 'par'],
     summary:
-      'Copie parallèle d’un élément désigné (surligné). La copie reste désignée pour enchaîner ; Échap = fin. Avec dx/dy/… : distances fixes, 2ᵉ clic = sens',
-    usage: '[dx|dy|dz|dxy|… distances]  ·  sans arg = désigner + emplacement',
+      'Copie parallèle d’un élément désigné. /paral 1.2 = distance fixe, clic = côté, enchaîne jusqu’à Échap',
+    usage: '[distance]  ·  [dx|dy|…]  ·  sans arg = emplacement libre',
     run: (ctx, args) => {
       // Compat : ancien /paral x|y|z <d> sans préfixe D → helper d’axe
       if (args.length >= 2) {
@@ -706,23 +713,11 @@ const commands: CommandDef[] = [
           }
         }
       }
-      // Ancien /paral <d> relatif à la dernière aide (un seul nombre, sans D)
+      // /paral 1.2 — désigner un objet, clic = côté, enchaîner à 1.2 u.
       if (args.length === 1 && !/^d/i.test(args[0]!)) {
-        const dist = Number(args[0]);
-        if (Number.isFinite(dist)) {
-          const ref = ctx.doc.lastHelper;
-          if (!ref) {
-            ctx.feedback(
-              "Aucune ligne d'aide de référence. /axes, /hx… ou /paral dx … pour désigner un élément.",
-              'err',
-            );
-            return;
-          }
-          ctx.doc.addHelper(helperParallelTo(ref, dist));
-          ctx.feedback(
-            `Parallèle à la dernière aide, décalage ${r3(dist)} (perp. XY)`,
-            'ok',
-          );
+        const dist = Number(args[0]!.replace(',', '.'));
+        if (Number.isFinite(dist) && dist > 0) {
+          ctx.tools.startParal([], dist);
           return;
         }
       }
@@ -1045,6 +1040,23 @@ const commands: CommandDef[] = [
         return;
       }
       ctx.tools.startCut();
+    },
+  },
+  {
+    name: 'trim',
+    aliases: ['ajuster', 'couper', 'tr'],
+    summary:
+      'Raccourcit un objet : 1) objet  2) endroit  3) côté à garder (ligne / arc / mur / polyligne ouverte)',
+    usage: 'interactif',
+    run: (ctx, args) => {
+      if (args.length > 0) {
+        ctx.feedback(
+          'Usage : /trim  — clic objet, clic coupe, clic côté à garder. Échap = terminer.',
+          'err',
+        );
+        return;
+      }
+      ctx.tools.startTrim();
     },
   },
   {
@@ -1420,6 +1432,23 @@ const commands: CommandDef[] = [
         return;
       }
       ctx.tools.startJoin();
+    },
+  },
+  {
+    name: 'corner',
+    aliases: ['coin', 'cn', 'angle'],
+    summary:
+      'Coin L forcé entre 2 murs (jamais T). Clic = côté à garder si les murs se croisent.',
+    usage: 'interactif : 1) 1er mur  2) 2ᵉ mur',
+    run: (ctx, args) => {
+      if (args.length > 0) {
+        ctx.feedback(
+          'Usage : /corner  — clic 1er mur (côté à garder), clic 2ᵉ mur. Échap = fin.',
+          'err',
+        );
+        return;
+      }
+      ctx.tools.startCorner();
     },
   },
 
@@ -2089,6 +2118,7 @@ async function runSave(
       }
       await fsWrite(ctx.doc.filePath, serializeGkd(snap));
       ctx.doc.markSaved();
+      ctx.app.rememberFile(ctx.doc.filePath);
       ctx.setDocTitle(ctx.doc.filename);
       ctx.feedback(
         `Enregistré : ${ctx.doc.filePath} (${ctx.doc.helpers.length} aide(s), ${snap.wallLibrary.length} mur(s) biblio)`,
@@ -2163,9 +2193,64 @@ async function runSave(
     ctx.doc.filePath = path;
     ctx.doc.filename = fileName;
     ctx.doc.markSaved();
+    ctx.app.rememberFile(path);
     ctx.setDocTitle(fileName);
     ctx.feedback(
       `Enregistré : ${path} (${ctx.doc.helpers.length} aide(s), ${snap.wallLibrary.length} mur(s) biblio)`,
+      'ok',
+    );
+  } catch (e) {
+    ctx.feedback(e instanceof Error ? e.message : String(e), 'err');
+  }
+}
+
+/** /openlast — premier fichier encore présent dans l’historique (7 max). */
+async function runOpenLast(ctx: CommandContext): Promise<void> {
+  const recents = [...ctx.app.recentFiles];
+  if (recents.length === 0) {
+    ctx.feedback(
+      'Aucun fichier récent. Ouvrez ou enregistrez un .GKD d’abord.',
+      'warn',
+    );
+    return;
+  }
+  if (!(await fsAvailable())) {
+    ctx.feedback(
+      'API disque indisponible. Relancez via lancer-GrokCad.sh.',
+      'err',
+    );
+    return;
+  }
+
+  let chosen: (typeof recents)[number] | null = null;
+  for (const f of recents) {
+    if (await fsExists(f.path)) {
+      chosen = f;
+      break;
+    }
+    ctx.app.forgetFile(f.path);
+    ctx.feedback(`Plus sur le disque : ${f.path}`, 'warn');
+  }
+  if (!chosen) {
+    ctx.feedback('Aucun des 7 fichiers récents n’existe plus.', 'err');
+    return;
+  }
+
+  try {
+    ctx.tools.cancel(false);
+    const { content } = await fsRead(chosen.path);
+    const gkd = parseGkd(content);
+    ctx.doc.load(gkd, chosen.name, chosen.path);
+    ctx.walls.loadFromDocument(gkd.wallLibrary ?? []);
+    ctx.viewport.applyCameraState(gkd.camera);
+    ctx.setDocTitle(chosen.name);
+    ctx.app.rememberFile(chosen.path);
+    const objs = gkd.entities.filter((e) => e.kind === 'object');
+    for (const o of objs) {
+      if (o.kind === 'object') void objectDefCache.ensure(o.libTab, o.libName);
+    }
+    ctx.feedback(
+      `Ouvert (dernier) : ${chosen.path}  (v${gkd.version}, ${gkd.entities.length} entité(s))`,
       'ok',
     );
   } catch (e) {
