@@ -763,7 +763,7 @@ const commands: CommandDef[] = [
   },
   {
     name: 'efface_aides',
-    aliases: ['clear_helpers', 'ea', 'cls_aides', 'effaides'],
+    aliases: ['clear_helpers', 'ea', 'cls_aides', 'effaides', 'dh'],
     summary: "Efface TOUTES les lignes d'aide d'un coup",
     run: (ctx) => {
       const n = ctx.doc.clearHelpers();
@@ -1677,6 +1677,73 @@ const commands: CommandDef[] = [
         return;
       }
       ctx.feedback('Usage : /snap  ·  /snap 20  ·  /snap on|off  ·  /param', 'err');
+    },
+  },
+  {
+    name: 'grid',
+    aliases: ['grille'],
+    summary: 'Affiche ou masque la grille de fond (écart = Paramètres, 1 u. = 1 m)',
+    usage: 'on | off',
+    run: (ctx, args) => {
+      const a0 = (args[0] ?? '').toLowerCase();
+      if (!a0 || a0 === '?' || a0 === 'status') {
+        const vis = ctx.app.gridVisible ? 'ON' : 'OFF';
+        const snap = ctx.app.gridSnapEffective ? 'ON' : 'OFF';
+        ctx.feedback(
+          `Grid ${vis} · Grid Snap ${snap} · écart ${ctx.app.gridSpacingMeters} m · /grid on|off · /gridsnap on|off`,
+          'info',
+        );
+        return;
+      }
+      if (a0 === 'on' || a0 === 'oui' || a0 === '1') {
+        ctx.app.setGridVisible(true);
+        ctx.feedback('Grid ON', 'ok');
+        return;
+      }
+      if (a0 === 'off' || a0 === 'non' || a0 === '0') {
+        ctx.app.setGridVisible(false);
+        ctx.feedback(
+          ctx.app.gridSnap
+            ? 'Grid OFF (Grid Snap conservé, inactif tant que la grille est cachée)'
+            : 'Grid OFF',
+          'ok',
+        );
+        return;
+      }
+      ctx.feedback('Usage : /grid on|off', 'err');
+    },
+  },
+  {
+    name: 'gridsnap',
+    aliases: ['gsnap', 'snapegrille', 'accrochegrille'],
+    summary: 'Accroche sur la grille au clic droit (uniquement si la grille est visible)',
+    usage: 'on | off',
+    run: (ctx, args) => {
+      const a0 = (args[0] ?? '').toLowerCase();
+      if (!a0 || a0 === '?' || a0 === 'status') {
+        const vis = ctx.app.gridVisible ? 'ON' : 'OFF';
+        const snap = ctx.app.gridSnapEffective ? 'ON' : 'OFF';
+        ctx.feedback(
+          `Grid Snap ${snap} · Grid ${vis} · clic droit = nœud de grille si ON · /gridsnap on|off`,
+          'info',
+        );
+        return;
+      }
+      if (a0 === 'on' || a0 === 'oui' || a0 === '1') {
+        const r = ctx.app.setGridSnap(true);
+        if (!r.ok) {
+          ctx.feedback(r.error, 'err');
+          return;
+        }
+        ctx.feedback('Grid Snap ON', 'ok');
+        return;
+      }
+      if (a0 === 'off' || a0 === 'non' || a0 === '0') {
+        ctx.app.setGridSnap(false);
+        ctx.feedback('Grid Snap OFF', 'ok');
+        return;
+      }
+      ctx.feedback('Usage : /gridsnap on|off', 'err');
     },
   },
   {

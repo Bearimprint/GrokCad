@@ -432,12 +432,61 @@ body {
 .status-zone {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   padding: 6px 4px 6px 12px;
   border-left: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.grid-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.grid-chip:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--accent-soft);
+}
+
+.grid-chip:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.grid-chip:disabled {
+  cursor: default;
+  color: var(--text-dim);
+}
+
+.grid-chip:disabled .grid-state {
+  color: var(--text-dim);
+  font-weight: 700;
+}
+
+.grid-state {
+  font-weight: 700;
+}
+
+.grid-state.on {
+  color: var(--ok);
+}
+
+.grid-state.off {
+  color: var(--err);
 }
 
 .stat {

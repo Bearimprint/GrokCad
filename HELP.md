@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.24.15**  
+> Version de référence : **0.24.16**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -15,7 +15,7 @@ Ligne de commande : bas gauche (`GrokCAD>`). Préfixe `/` ou `\` (ex. `\ligne`).
 | Glisser **bouton gauche** | **Pan** de la vue |
 | **Clic gauche** court (outil actif) | Place un point **sans** snap |
 | Glisser **bouton milieu** | Pan |
-| **Clic droit** | **Snap** dans le rayon (défaut **20 px**) |
+| **Clic droit** | **Snap** dans le rayon (défaut **20 px**) — objets, puis nœud de grille si `/gridsnap on` |
 | **Molette** | Zoom centré sous le curseur |
 | **Échap** | Annule l’outil / ferme les dialogues |
 | **Suppr** | Efface la sélection (si pas dans un champ) |
@@ -26,7 +26,8 @@ Ligne de commande : bas gauche (`GrokCAD>`). Préfixe `/` ou `\` (ex. `\ligne`).
 1. **Croisement / intersection** le plus proche dans le rayon (y compris aides)  
 2. Sinon **extrémité** (fin de ligne / d’arc)  
 3. Sinon **point le plus proche** sur la courbe  
-4. Sinon aucune accroche → même effet qu’un clic gauche  
+4. Sinon **nœud de grille** si `/gridsnap on` et grille visible (`/grid on`)  
+5. Sinon aucune accroche → même effet qu’un clic gauche  
 
 Point accroché réutilisable avec `@`. Souris courante : `.` (ou `m` / `souris`).
 
@@ -79,7 +80,7 @@ Point accroché réutilisable avec `@`. Souris courante : `.` (ou `m` / `souris`
 | `/hz` | | clics ou point | Aide // **Z** |
 | `/paral` | `/parallele` `/parallel` `/par` | voir ci-dessous | Copie **//** d’un élément désigné (orange ≠ sélection) |
 | `/perp` | `/perpendiculaire` `/orthogonal` | `[x y z]` · `.` · `@` | Perpendiculaire d’aide à la dernière aide |
-| `/efface_aides` | `/clear_helpers` `/ea` `/cls_aides` `/effaides` | | Efface toutes les aides |
+| `/efface_aides` | `/clear_helpers` `/ea` `/cls_aides` `/effaides` `/dh` | | Efface toutes les aides |
 
 ### `/paral`
 
@@ -219,7 +220,11 @@ Clic barre d’état = suivante (clic droit = précédente). Prefs : `grokcad.pe
 | Commande | Alias | Usage |
 |----------|-------|-------|
 | `/snap` | `/accroche` | `[px \| on \| off \| ?]` |
+| `/grid` | `/grille` | `on \| off` — affiche / masque la grille (écart = Paramètres, 1 u. = 1 m) |
+| `/gridsnap` | `/gsnap` | `on \| off` — accroche clic droit sur un nœud de grille. Impossible si `/grid off` |
 | `/param` | `/params` `/settings` `/prefs` | Fenêtre Paramètres |
+
+Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge gras). Clic = bascule. Si la grille est cachée, **Grid Snap OFF** est grisé et non cliquable. `/grid off` force l’affichage **Grid Snap OFF** grisé. Case Paramètres *« Grid Off désactive automatiquement le snap de la grille »* (cochée par défaut) : masquer la grille écrit aussi `gridsnap = off`.
 
 ---
 

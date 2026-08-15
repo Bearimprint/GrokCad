@@ -40,6 +40,22 @@
           <div id="cmd-feedback" class="cmd-feedback" aria-live="polite"></div>
         </div>
         <div class="status-zone">
+          <button
+            type="button"
+            id="stat-grid"
+            class="grid-chip"
+            title="Afficher / masquer la grille (/grid on|off)"
+          >
+            Grid <span class="grid-state on">ON</span>
+          </button>
+          <button
+            type="button"
+            id="stat-gridsnap"
+            class="grid-chip"
+            title="Accroche sur la grille au clic droit (/gridsnap on|off)"
+          >
+            Grid Snap <span class="grid-state off">OFF</span>
+          </button>
           <div class="stat" title="Échelle d'affichage">
             <span class="stat-label">Échelle</span>
             <span id="stat-scale">1 : 100</span>

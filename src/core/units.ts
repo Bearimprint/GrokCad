@@ -46,6 +46,17 @@ export function gridSpacingInWorld(
   return m / UNIT_TO_METERS[unit];
 }
 
+/** Nœud de grille le plus proche (réseau XY, Z inchangé). */
+export function nearestGridPoint(
+  click: readonly [number, number, number],
+  gridSpacingMeters: number,
+  unit: UnitId,
+): [number, number, number] {
+  const s = Math.max(1e-12, gridSpacingInWorld(gridSpacingMeters, unit));
+  const snap = (v: number) => Math.round(v / s) * s;
+  return [snap(click[0]), snap(click[1]), click[2]];
+}
+
 export function unitShortLabel(unit: UnitId): string {
   return unit;
 }

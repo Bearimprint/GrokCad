@@ -6,17 +6,26 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.24.15**
+**Version courante : 0.24.16**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.24.15
+# → http://localhost:5173/  ·  titre GrokCad v.0.24.16
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
+
+---
+
+## Session 2026-08-15 — `/grid` + `/gridsnap` (→ **0.24.16**)
+
+- **`/grid on|off`** : affiche / masque la grille (écart Paramètres, 1 u. = 1 m réel).
+- **`/gridsnap on|off`** : accroche nœud de grille au clic droit. `/gridsnap on` si grille cachée → *« impossible d'activer la grille quand celle-ci est cachée »*.
+- Barre du bas : **Grid ON/OFF** + **Grid Snap ON/OFF** (ON vert gras, OFF rouge gras), clic = bascule. Grille cachée → Grid Snap OFF grisé, non cliquable.
+- Paramètres : case *« Grid Off désactive automatiquement le snap de la grille »* (cochée par défaut).
 
 ---
 
@@ -203,15 +212,14 @@ Revue `/jonction` + `/join` : bugs de snap T/Y, peigne, zone L, stratégie Y/N.
 2. Cumul optionnel des valeurs sur la chaîne.
 3. **`/explode`** sur chaîne → segments `/cote` individuels.
 
-### B. Grille (déjà prévu avant)
-1. **`/grid` on|off** — affichage grille (`Viewport.rebuildGrid` + pref `gridVisible`).
-2. **`/gridsnap` on|off** — accroche grille au clic droit (si grille visible).
+### B. Grille
+**Fait en 0.24.16** — `/grid` · `/gridsnap` · pastilles barre du bas · case Paramètres.
 
 ---
 
 ## Checklist reprise 30 s
 
-1. `lancer-GrokCad.sh` → **GrokCad v.0.24.15**
+1. `lancer-GrokCad.sh` → **GrokCad v.0.24.16**
 2. Smoke texte : `/txt Cuisine` · `/rect` + Shift · `/textbox`
 3. Smoke cote : `/cote` (2+ segments, Échap, sélection texte seul, `/m1` ligne vs texte)
 4. Smoke move : `/move` et `/m1` avec **[Shift]** H/45°/V
@@ -279,7 +287,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 | `/jonction` snap tol. 65 cm + feedback nearest | **OK** | **0.22.5** |
 | `/join` peigne bandes / béton / peaux ext. | **validé UI** | **0.22.4–0.22.5** |
 | `/dist` mesure 2 points | **fait** | **0.22.5** |
-| `/grid` on\|off · `/gridsnap` on\|off | **prochaine session** | — |
+| `/grid` on\|off · `/gridsnap` on\|off | **fait** | **0.24.16** |
 | `/join` + `/jonction` Y : BIM priorités (béton↔béton, isolant stop net) | **OK** | **0.24.10** |
 | `/jonction` T/Y multi-extrémités (cadre) | partiel | 0.18.x |
 | `/extrude` · Undo | pas commencé | — |

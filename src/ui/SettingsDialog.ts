@@ -25,6 +25,7 @@ export class SettingsDialog {
   private enabledInput: HTMLInputElement;
   private unitsSelect: HTMLSelectElement;
   private gridInput: HTMLInputElement;
+  private gridOffDisablesSnapInput: HTMLInputElement;
   private stylesList: HTMLElement;
   private textboxPadInput: HTMLInputElement;
   private onUnitsChange: UnitsChangeHandler | null = null;
@@ -61,6 +62,10 @@ export class SettingsDialog {
                 <input type="number" id="set-grid-spacing" min="0.001" step="0.1" />
                 <span class="settings-unit-hint">mètre(s)</span>
               </span>
+            </label>
+            <label class="settings-row">
+              <span>Grid Off désactive automatiquement le snap de la grille</span>
+              <input type="checkbox" id="set-grid-off-disables-snap" />
             </label>
           </section>
           <section class="settings-section">
@@ -109,6 +114,9 @@ export class SettingsDialog {
     this.enabledInput = this.overlay.querySelector('#set-snap-enabled')!;
     this.unitsSelect = this.overlay.querySelector('#set-units')!;
     this.gridInput = this.overlay.querySelector('#set-grid-spacing')!;
+    this.gridOffDisablesSnapInput = this.overlay.querySelector(
+      '#set-grid-off-disables-snap',
+    )!;
     this.stylesList = this.overlay.querySelector('#set-styles-list')!;
     this.textboxPadInput = this.overlay.querySelector('#set-textbox-pad')!;
 
@@ -157,6 +165,10 @@ export class SettingsDialog {
           this.app.gridSpacingMeters || DEFAULT_GRID_SPACING_METERS,
         );
       }
+    });
+
+    this.gridOffDisablesSnapInput.addEventListener('change', () => {
+      this.app.setGridOffDisablesSnap(this.gridOffDisablesSnapInput.checked);
     });
 
     this.textboxPadInput.addEventListener('change', () => {
@@ -218,6 +230,7 @@ export class SettingsDialog {
     this.gridInput.value = String(
       this.app.gridSpacingMeters || DEFAULT_GRID_SPACING_METERS,
     );
+    this.gridOffDisablesSnapInput.checked = this.app.gridOffDisablesSnap;
     this.textboxPadInput.value = String(
       this.textPrefs?.textboxPadding ?? 0.03,
     );

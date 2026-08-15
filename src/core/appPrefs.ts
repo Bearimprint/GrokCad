@@ -26,6 +26,19 @@ export interface AppPrefsFile {
    * Défaut 1 m — un carré de grille = 1 mètre.
    */
   gridSpacingMeters: number;
+  /** Grille de fond visible (`/grid on|off`). Défaut true. */
+  gridVisible: boolean;
+  /**
+   * Accroche sur la grille au clic droit (`/gridsnap on|off`).
+   * Inactif tant que `gridVisible` est false.
+   */
+  gridSnap: boolean;
+  /**
+   * Si true : `/grid off` écrit aussi `gridSnap = false`.
+   * Si false : le souhait snap est conservé et redevient actif au prochain `/grid on`.
+   * Dans les deux cas, le snap grille n’est jamais effectif tant que la grille est cachée.
+   */
+  gridOffDisablesSnap: boolean;
   /**
    * Dernier répertoire d’où un fichier a été ouvert (/open).
    * Chemin absolu disque ; utilisé comme départ de l’explorateur.
@@ -49,6 +62,10 @@ export const RECENT_FILES_MAX = 7;
 export const APP_STORAGE_KEY = 'grokcad.app';
 export const DEFAULT_SNAP_RADIUS_PX = 20;
 
+/** Message `/gridsnap on` alors que la grille est cachée (texte demandé). */
+export const GRID_SNAP_HIDDEN_ERROR =
+  "impossible d'activer la grille quand celle-ci est cachée";
+
 export function defaultAppPrefs(): AppPrefsFile {
   return {
     version: 1,
@@ -58,6 +75,9 @@ export function defaultAppPrefs(): AppPrefsFile {
     },
     units: DEFAULT_UNIT,
     gridSpacingMeters: DEFAULT_GRID_SPACING_METERS,
+    gridVisible: true,
+    gridSnap: false,
+    gridOffDisablesSnap: true,
   };
 }
 
@@ -80,6 +100,15 @@ function normalize(raw: unknown): AppPrefsFile {
     o.gridSpacingMeters > 0
   ) {
     base.gridSpacingMeters = o.gridSpacingMeters;
+  }
+  if (typeof o.gridVisible === 'boolean') base.gridVisible = o.gridVisible;
+  if (typeof o.gridSnap === 'boolean') base.gridSnap = o.gridSnap;
+  if (typeof o.gridOffDisablesSnap === 'boolean') {
+    base.gridOffDisablesSnap = o.gridOffDisablesSnap;
+  }
+  // Snap grille jamais ON si la grille est cachée (état persisté).
+  if (!base.gridVisible && base.gridOffDisablesSnap) {
+    base.gridSnap = false;
   }
   if (
     typeof o.lastOpenDir === 'string' &&
@@ -174,6 +203,23 @@ export class AppPrefsManager {
     return this.prefs.gridSpacingMeters;
   }
 
+  get gridVisible(): boolean {
+    return this.prefs.gridVisible;
+  }
+
+  get gridSnap(): boolean {
+    return this.prefs.gridSnap;
+  }
+
+  get gridOffDisablesSnap(): boolean {
+    return this.prefs.gridOffDisablesSnap;
+  }
+
+  /** Accroche grille réellement active (visible + demandé). */
+  get gridSnapEffective(): boolean {
+    return this.prefs.gridVisible && this.prefs.gridSnap;
+  }
+
   /** Dernier dossier d’ouverture (/open), ou null si jamais mémorisé. */
   get lastOpenDir(): string | null {
     const d = this.prefs.lastOpenDir?.trim();
@@ -225,6 +271,51 @@ export class AppPrefsManager {
   setGridSpacingMeters(meters: number): void {
     if (!Number.isFinite(meters) || meters <= 0) return;
     this.prefs.gridSpacingMeters = meters;
+    this.emit();
+  }
+
+  setGridVisible(visible: boolean): void {
+    if (this.prefs.gridVisible === visible) return;
+    this.prefs.gridVisible = visible;
+    if (!visible && this.prefs.gridOffDisablesSnap) {
+      this.prefs.gridSnap = false;
+    }
+    this.emit();
+  }
+
+  toggleGridVisible(): boolean {
+    this.setGridVisible(!this.prefs.gridVisible);
+    return this.prefs.gridVisible;
+  }
+
+  /**
+   * Active / désactive l’accroche grille.
+   * Refuse ON si la grille est cachée (message `GRID_SNAP_HIDDEN_ERROR`).
+   */
+  setGridSnap(enabled: boolean): { ok: true } | { ok: false; error: string } {
+    if (enabled && !this.prefs.gridVisible) {
+      return { ok: false, error: GRID_SNAP_HIDDEN_ERROR };
+    }
+    if (this.prefs.gridSnap === enabled) return { ok: true };
+    this.prefs.gridSnap = enabled;
+    this.emit();
+    return { ok: true };
+  }
+
+  toggleGridSnap():
+    | { ok: true; enabled: boolean }
+    | { ok: false; error: string } {
+    const r = this.setGridSnap(!this.prefs.gridSnap);
+    if (!r.ok) return r;
+    return { ok: true, enabled: this.prefs.gridSnap };
+  }
+
+  setGridOffDisablesSnap(value: boolean): void {
+    if (this.prefs.gridOffDisablesSnap === value) return;
+    this.prefs.gridOffDisablesSnap = value;
+    if (value && !this.prefs.gridVisible && this.prefs.gridSnap) {
+      this.prefs.gridSnap = false;
+    }
     this.emit();
   }
 

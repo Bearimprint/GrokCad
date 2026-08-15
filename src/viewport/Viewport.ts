@@ -16,6 +16,7 @@ import {
   DEFAULT_GRID_SPACING_METERS,
   DEFAULT_UNIT,
   gridSpacingInWorld,
+  nearestGridPoint,
   type UnitId,
 } from '../core/units';
 import { EntityLayer } from './EntityLayer';
@@ -632,6 +633,11 @@ export class Viewport {
     return this.appPrefs?.snap.enabled ?? true;
   }
 
+  /** Accroche grille : visible ET demandée. */
+  isGridSnapEffective(): boolean {
+    return this.appPrefs?.gridSnapEffective ?? false;
+  }
+
   dispose(): void {
     cancelAnimationFrame(this.anim);
     this.helperLayer.dispose();
@@ -785,6 +791,28 @@ export class Viewport {
       snap = snapAt(click, curves, this.snapToleranceMeters());
     }
 
+    // Accroche nœud de grille si aucun snap objet, grille visible + /gridsnap on
+    if (!snap && this.isGridSnapEffective()) {
+      const gp = nearestGridPoint(
+        click,
+        this.gridSpacingMeters,
+        this.units,
+      );
+      const dx = gp[0] - click[0];
+      const dy = gp[1] - click[1];
+      const dz = gp[2] - click[2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d <= this.snapToleranceMeters()) {
+        snap = {
+          point: gp,
+          kind: 'grid',
+          dist: d,
+          entityIds: [],
+          helperIds: [],
+        };
+      }
+    }
+
     if (snap) {
       this.lastSnap = snap;
       this.helperLayer.showSnap(snap.point, this.ortho.top);
@@ -855,7 +883,9 @@ export class Viewport {
           ? '∩'
           : this.lastSnap.kind === 'endpoint'
             ? '◦'
-            : '∥';
+            : this.lastSnap.kind === 'grid'
+              ? '#'
+              : '∥';
       text += `  │  snap ${tag} ${fmt(p[0])},${fmt(p[1])},${fmt(p[2])}`;
     }
     this.ui.setMouse(text);
@@ -904,6 +934,7 @@ export class Viewport {
     const key = `${size.toFixed(4)}:${divisions}:${gx.toFixed(4)}:${gy.toFixed(4)}:${spacing.toFixed(6)}`;
     if (!force && key === this.lastGridKey) {
       this.grid.position.set(gx, gy, 0);
+      this.applyGridVisibility();
       return;
     }
     this.lastGridKey = key;
@@ -916,10 +947,15 @@ export class Viewport {
     this.grid.rotation.x = Math.PI / 2;
     this.grid.position.set(gx, gy, 0);
     this.scene.add(this.grid);
+    this.applyGridVisibility();
 
     // Axes ~ 2 m réels
     const axisLen = gridSpacingInWorld(2, this.units);
     this.axes.scale.setScalar(axisLen);
+  }
+
+  private applyGridVisibility(): void {
+    this.grid.visible = this.appPrefs?.gridVisible ?? true;
   }
 
   private loop = (): void => {

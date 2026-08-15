@@ -37,7 +37,7 @@ const EPS = 1e-9;
 /** Extrémités quasi confondues → traitées comme intersection. */
 const ENDPOINT_MERGE = 0.0005; // m (~0.5 mm)
 
-export type SnapKind = 'intersection' | 'endpoint' | 'nearest';
+export type SnapKind = 'intersection' | 'endpoint' | 'nearest' | 'grid';
 
 export interface SnapResult {
   point: Vec3;
@@ -255,6 +255,7 @@ const KIND_PRIORITY: Record<SnapKind, number> = {
   intersection: 0,
   endpoint: 1,
   nearest: 2,
+  grid: 3,
 };
 
 /**

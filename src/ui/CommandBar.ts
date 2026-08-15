@@ -303,7 +303,9 @@ export class CommandBar {
             ? 'intersection'
             : snap.kind === 'endpoint'
               ? 'extrémité'
-              : 'courbe';
+              : snap.kind === 'grid'
+                ? 'grille'
+                : 'courbe';
         const p = snap.point;
         this.setFeedback(
           `Accroche ${tag} → X=${p[0].toFixed(3)} Y=${p[1].toFixed(3)} Z=${p[2].toFixed(3)}  (@ pour réutiliser)  ·  rayon ${viewport.snapRadiusPx()} px`,

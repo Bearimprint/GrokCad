@@ -1,7 +1,7 @@
 {
   "name": "grokcad",
   "private": true,
-  "version": "0.24.15",
+  "version": "0.24.16",
   "type": "module",
   "description": "GrokCAD — éditeur CAO 3D inspiré d'ARC+",
   "scripts": {
@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:jonction": "tsx scripts/test-jonction.mts && tsx scripts/test-jonction-diagonal.mts && tsx scripts/test-mur2-regression.mts && tsx scripts/test-layer-priority.mts && tsx scripts/test-join.mts",
-    "test:trim": "tsx scripts/test-trim.mts"
+    "test:trim": "tsx scripts/test-trim.mts",
+    "test:grid": "tsx scripts/test-grid.mts"
   },
   "dependencies": {
     "three": "^0.172.0"

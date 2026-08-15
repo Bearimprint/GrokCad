@@ -36,6 +36,8 @@ const docTitle = el<HTMLElement>('doc-title');
 const statScale = el<HTMLElement>('stat-scale');
 const statMouse = el<HTMLElement>('stat-mouse');
 const statView = el<HTMLElement>('stat-view');
+const statGrid = el<HTMLButtonElement>('stat-grid');
+const statGridSnap = el<HTMLButtonElement>('stat-gridsnap');
 const workplaneBadge = el<HTMLElement>('workplane-badge');
 const styleBarRoot = el<HTMLElement>('style-bar');
 
@@ -248,6 +250,51 @@ settings.setUnitsChangeHandler((prev, next) => {
 // Hooks édition library dans le contexte commandes
 cmdBar.context.getLibraryEdit = () => libraryEdit;
 cmdBar.context.closeLibraryEdit = closeLibraryEdit;
+
+function renderGridChip(
+  btn: HTMLButtonElement,
+  label: string,
+  on: boolean,
+): void {
+  btn.replaceChildren();
+  btn.append(`${label} `);
+  const st = document.createElement('span');
+  st.className = `grid-state ${on ? 'on' : 'off'}`;
+  st.textContent = on ? 'ON' : 'OFF';
+  btn.append(st);
+}
+
+function syncGridStatus(): void {
+  const vis = app.gridVisible;
+  renderGridChip(statGrid, 'Grid', vis);
+  statGrid.setAttribute('aria-pressed', vis ? 'true' : 'false');
+
+  // Snap jamais affiché ON si la grille est cachée (texte grisé, non cliquable)
+  const snapOn = vis && app.gridSnap;
+  renderGridChip(statGridSnap, 'Grid Snap', snapOn);
+  statGridSnap.disabled = !vis;
+  statGridSnap.setAttribute('aria-pressed', snapOn ? 'true' : 'false');
+  statGridSnap.title = vis
+    ? 'Accroche sur la grille au clic droit (/gridsnap on|off)'
+    : 'Grid Snap indisponible tant que la grille est cachée';
+}
+
+syncGridStatus();
+app.onChange(syncGridStatus);
+
+statGrid.addEventListener('click', () => {
+  const on = app.toggleGridVisible();
+  cmdBar.setFeedback(on ? 'Grid ON' : 'Grid OFF', 'ok');
+});
+
+statGridSnap.addEventListener('click', () => {
+  const r = app.toggleGridSnap();
+  if (!r.ok) {
+    cmdBar.setFeedback(r.error, 'err');
+    return;
+  }
+  cmdBar.setFeedback(r.enabled ? 'Grid Snap ON' : 'Grid Snap OFF', 'ok');
+});
 
 setDocTitle(doc.filename);
 cmdBar.setFeedback(
