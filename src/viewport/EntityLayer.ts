@@ -41,9 +41,13 @@ import {
 } from '../core/insertOpening';
 import {
   ANCHOR_LAYER,
+  effectiveStroke,
+  effectiveTextStyle,
   entityDrawLayer,
+  entityLayerVisible,
   renderOrderForDrawLayer,
 } from '../core/drawLayers';
+import type { DrawLayerLabel } from '../core/types';
 
 interface SolidPiece {
   points: Vec3[];
@@ -136,6 +140,7 @@ export class EntityLayer {
   private openingPreview: OpeningInterval[] = [];
   private wallOpenings: OpeningInterval[] = [];
   private docUnit: UnitId = DEFAULT_UNIT;
+  private drawLayers: readonly DrawLayerLabel[] = [];
 
   /** Cyan = sélection (/select). */
   static readonly SELECT_COLOR = '#4fc3f7';
@@ -170,12 +175,17 @@ export class EntityLayer {
     if (this.lastEntities.length) this.setEntities(this.lastEntities);
   }
 
+  setLayerTable(table: readonly DrawLayerLabel[]): void {
+    this.drawLayers = table;
+  }
+
   setEntities(entities: readonly Entity[]): void {
     this.lastEntities = entities;
+    const visible = entities.filter((e) => entityLayerVisible(e, this.drawLayers));
     this.wallOpenings = collectWallOpenings(entities, this.openingPreview);
     // Précharge les motifs /fill (re-render via hatchCache.onChange dans main)
     preloadHatchFromEntities(entities);
-    const draw = entities
+    const draw = visible
       .filter(
         (e): e is DrawEntity =>
           e.kind === 'line' ||
@@ -570,7 +580,8 @@ export class EntityLayer {
    * lineWidth 1→7 → taille 1→7 px, indépendant du zoom / perspective.
    */
   private upsertPoint(e: PointEntity): void {
-    const hl = this.highlightStyle(e.id, e.color, e.lineWidth);
+    const stroke = effectiveStroke(e, this.drawLayers);
+    const hl = this.highlightStyle(e.id, stroke.color, stroke.lineWidth);
     const sizePx = Math.max(1, Math.min(12, Math.round(hl.lineWidth)));
 
     let pts = this.pointObjects.get(e.id);
@@ -658,7 +669,7 @@ export class EntityLayer {
         add(s.points, s.color, s.lineWidth, s.lineStyle);
       }
     } else if (e.kind === 'polyline') {
-      for (const s of polylineStrokes(e)) {
+      for (const s of polylineStrokes(e, 48, this.drawLayers)) {
         add(s.points, s.color, s.lineWidth, s.lineStyle);
       }
       // Remplissage hachure (/fill)
@@ -673,7 +684,8 @@ export class EntityLayer {
       }
     } else {
       const pts = entityToPoints(e);
-      add(pts, e.color, e.lineWidth, e.lineStyle ?? 'plein');
+      const stroke = effectiveStroke(e, this.drawLayers);
+      add(pts, stroke.color, stroke.lineWidth, stroke.lineStyle);
     }
     return out;
   }
@@ -688,8 +700,15 @@ export class EntityLayer {
   }
 
   private upsertText(e: TextEntity): void {
-    const hl = this.highlightStyle(e.id, e.color || '#e0e0e0', 1);
-    const te: TextEntity = { ...e, color: hl.color };
+    const look = effectiveTextStyle(e, this.drawLayers);
+    const hl = this.highlightStyle(e.id, look.color, 1);
+    const te: TextEntity = {
+      ...e,
+      color: hl.color,
+      fontFamily: look.fontFamily,
+      bold: look.bold,
+      italic: look.italic,
+    };
     const built = this.buildTextMeshData(te);
     if (!built) return;
 

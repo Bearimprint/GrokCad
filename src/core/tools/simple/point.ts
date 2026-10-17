@@ -3,13 +3,14 @@
  */
 
 import { createPointEntity } from '../../drawing';
-import type { Entity, Vec3 } from '../../types';
+import type { ByLayerFlags, Entity, Vec3 } from '../../types';
 import type { ToolFeedback } from '../types';
 
 export function placePointEntity(args: {
   pt: Vec3;
   color: string;
   lineWidth: number;
+  byLayer?: ByLayerFlags;
   colorLabel: string;
   add(entity: Entity): void;
   feedback: ToolFeedback;
@@ -19,6 +20,7 @@ export function placePointEntity(args: {
     createPointEntity(args.pt, {
       color: args.color,
       lineWidth: args.lineWidth,
+      byLayer: args.byLayer,
     }),
   );
   args.feedback(

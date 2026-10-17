@@ -2,8 +2,11 @@ import {
   clampLayerLabel,
   DEFAULT_DRAW_LAYER,
   isDrawLayerId,
+  isPositiveDrawLayer,
   parseEntityDrawLayer,
+  withLayerPatch,
   type DrawLayerLabel,
+  type LayerPatch,
 } from './drawLayers';
 import { createEmptyDocument } from './gkd';
 import type {
@@ -197,21 +200,56 @@ export class CadDocument {
   }
 
   setDrawLayerLabel(id: number, label: string): void {
+    this.patchDrawLayer(id, { label: clampLayerLabel(label) });
+  }
+
+  patchDrawLayer(id: number, patch: LayerPatch): void {
     if (!isDrawLayerId(id)) return;
-    const trimmed = clampLayerLabel(label);
-    const list = [...(this._doc.drawLayers ?? [])];
-    const i = list.findIndex((l) => l.id === id);
-    if (!trimmed.trim()) {
-      if (i >= 0) list.splice(i, 1);
-    } else if (i >= 0) {
-      list[i] = { id, label: trimmed };
-    } else {
-      list.push({ id, label: trimmed });
-      list.sort((a, b) => a.id - b.id);
+    if (!isPositiveDrawLayer(id)) {
+      if (patch.label === undefined) return;
+      const trimmed = clampLayerLabel(patch.label);
+      const list = [...(this._doc.drawLayers ?? [])];
+      const i = list.findIndex((l) => l.id === id);
+      if (!trimmed.trim()) {
+        if (i >= 0) list.splice(i, 1);
+      } else if (i >= 0) {
+        list[i] = { ...list[i], id, label: trimmed };
+      } else {
+        list.push({ id, label: trimmed });
+        list.sort((a, b) => a.id - b.id);
+      }
+      this._doc.drawLayers = list;
+      this.touch();
+      this.emit();
+      return;
     }
-    this._doc.drawLayers = list;
+    this._doc.drawLayers = withLayerPatch(this._doc.drawLayers ?? [], id, patch);
     this.touch();
     this.emit();
+  }
+
+  setDrawLayers(table: readonly DrawLayerLabel[]): void {
+    this._doc.drawLayers = table.map((l) => ({ ...l }));
+    this.touch();
+    this.emit();
+  }
+
+  /** Envoie des entités sur un autre calque. Ne supprime rien. */
+  assignDrawLayer(ids: Iterable<string>, layer: number): number {
+    if (!isDrawLayerId(layer)) return 0;
+    const set = new Set(ids);
+    if (set.size === 0) return 0;
+    let n = 0;
+    this._doc.entities = this._doc.entities.map((e) => {
+      if (!set.has(e.id)) return e;
+      n += 1;
+      return { ...e, drawLayer: layer };
+    });
+    if (n > 0) {
+      this.touch();
+      this.emit();
+    }
+    return n;
   }
 
   private stampDrawLayer(entity: Entity): Entity {

@@ -57,9 +57,11 @@ import {
 } from './objectInstance';
 import {
   ANCHOR_LAYER,
+  entitiesOnVisibleLayers,
   entityDrawLayer,
   hasAnchorPoint,
   hasInsertLayers,
+  resolveLayerStyle,
 } from './drawLayers';
 import {
   findNearestInsertHost,
@@ -955,10 +957,12 @@ export class DrawingTools {
 
   /** Place un point immédiatement (usage CLI : /point x,y,z). */
   placePoint(pt: Vec3): void {
+    const stroke = this.pen.strokeFields();
     const r = this.pen.resolved;
     const ent = createPointEntity(pt, {
-      color: r.color,
-      lineWidth: r.lineWidth,
+      color: stroke.color,
+      lineWidth: stroke.lineWidth,
+      byLayer: stroke.byLayer,
     });
     this.doc.addEntity(ent);
     this.feedback(
@@ -1992,19 +1996,26 @@ export class DrawingTools {
     const resolved = tp
       ? tp.resolveColors(colors)
       : { color: this.pen.resolved.color, background: null as string | null };
+    const layer = resolveLayerStyle(this.doc.currentDrawLayer, this.doc.drawLayerLabels);
+    const fontBy = tp ? tp.current.fontByLayer : true;
+    const colorBy = tp ? tp.current.colorByLayer : this.pen.resolved.colorByLayer;
+    const byLayer: import('./types').ByLayerFlags = {};
+    if (colorBy) byLayer.color = true;
+    if (fontBy) byLayer.font = true;
     return createTextEntity(origin, {
       content,
       height: tp?.current.height ?? 0.25,
-      color: resolved.color,
+      color: colorBy ? layer.color : resolved.color,
       rotation,
-      fontFamily: tp?.current.fontFamily,
-      bold: tp?.current.bold,
-      italic: tp?.current.italic,
+      fontFamily: fontBy ? layer.fontFamily : tp?.current.fontFamily,
+      bold: fontBy ? layer.fontBold : tp?.current.bold,
+      italic: fontBy ? layer.fontItalic : tp?.current.italic,
       background: resolved.background,
       boxed,
       boxPadding: boxed ? (tp?.textboxPadding ?? 0.03) : undefined,
       hAlign: 0,
       vAlign: 0,
+      ...(Object.keys(byLayer).length > 0 ? { byLayer } : {}),
     });
   }
 
@@ -2585,7 +2596,7 @@ export class DrawingTools {
 
     // Étape 1 — mur à prolonger
     if (!this.joinStem) {
-      const hit = findNearestWall(pt, this.doc.entities, maxDist);
+      const hit = findNearestWall(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(
           `Aucun mur dans ${px} px. Cliquez près d’un mur linéaire.`,
@@ -2624,7 +2635,7 @@ export class DrawingTools {
       return;
     }
 
-    const hitT = findNearestWall(pt, this.doc.entities, maxDist, stemId);
+    const hitT = findNearestWall(pt, this.pickableEntities(), maxDist, stemId);
     if (!hitT) {
       this.feedback(
         `Aucun mur cible dans ${px} px (autre que le source).`,
@@ -2666,7 +2677,7 @@ export class DrawingTools {
     const px = this.viewport.snapRadiusPx();
 
     if (!this.cornerFirst) {
-      const hit = findNearestWall(pt, this.doc.entities, maxDist);
+      const hit = findNearestWall(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(`Aucun mur dans ${px} px.`, 'warn');
         return;
@@ -2686,7 +2697,7 @@ export class DrawingTools {
 
     const idA = this.cornerFirst.wallId;
     const clickA = this.cornerFirst.click;
-    const hitB = findNearestWall(pt, this.doc.entities, maxDist, idA);
+    const hitB = findNearestWall(pt, this.pickableEntities(), maxDist, idA);
     if (!hitB) {
       this.feedback(`Aucun 2ᵉ mur dans ${px} px.`, 'warn');
       return;
@@ -2722,7 +2733,7 @@ export class DrawingTools {
 
     // Étape 0 : désignation
     if (this.step === 0) {
-      const hit = findNearestDesignatable(pt, this.doc.entities, maxDist);
+      const hit = findNearestDesignatable(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(
           `Aucun élément à désigner dans ${this.viewport.snapRadiusPx()} px (ligne, arc, cercle, mur, aide).`,
@@ -3036,7 +3047,7 @@ export class DrawingTools {
     let length = this.insertLength;
     let xSign = this.insertXSign;
     if (this.step === 0) {
-      hit = findNearestInsertHost(cur, this.doc.entities, maxD);
+      hit = findNearestInsertHost(cur, this.pickableEntities(), maxD);
       this.designation?.set(hit ? [hit.entity.id] : []);
       length = measureOpening(def.entities).reachX;
       xSign = 1;
@@ -3122,7 +3133,7 @@ export class DrawingTools {
     if (this.step === 0) {
       const hit = findNearestInsertHost(
         pt,
-        this.doc.entities,
+        this.pickableEntities(),
         this.viewport.snapToleranceMeters(),
       );
       if (!hit) {
@@ -3225,7 +3236,7 @@ export class DrawingTools {
     if (!this.p0) return;
     const box = normalizeAabb(this.p0, pt);
     const mode = this.altDown ? 'remove' : 'add';
-    const n = this.selection.applyRect(this.doc.entities, box, mode);
+    const n = this.selection.applyRect(this.pickableEntities(), box, mode);
     this.viewport.setSelectRect(null, null);
     this.feedback(
       mode === 'add'
@@ -3238,6 +3249,11 @@ export class DrawingTools {
     this.step = 0;
   }
 
+  /** Clic, fenêtre, snap : un calque masqué n’est pas désignable. */
+  private pickableEntities(): readonly Entity[] {
+    return entitiesOnVisibleLayers(this.doc.entities, this.doc.drawLayerLabels);
+  }
+
   private onCopyPoint(pt: Vec3): void {
     // ── Mode désignation ──────────────────────────────────────────
     // Clic 1 : désigner (= base) → fantôme suit la souris immédiatement
@@ -3245,7 +3261,7 @@ export class DrawingTools {
     if (this.copyMode === 'designate') {
       if (this.step === 0) {
         const maxDist = this.viewport.snapToleranceMeters();
-        const hit = findNearestEntity(pt, this.doc.entities, maxDist);
+        const hit = findNearestEntity(pt, this.pickableEntities(), maxDist);
         if (!hit) {
           this.feedback(
             `Aucun élément à désigner dans ${this.viewport.snapRadiusPx()} px.`,
@@ -3373,7 +3389,7 @@ export class DrawingTools {
     // step 0 : désigner
     if (this.step === 0) {
       const maxDist = this.viewport.snapToleranceMeters();
-      const hit = findNearestEntity(pt, this.doc.entities, maxDist);
+      const hit = findNearestEntity(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(
           `Aucun objet dans ${this.viewport.snapRadiusPx()} px. Recliquez près d’un élément.`,
@@ -3418,7 +3434,7 @@ export class DrawingTools {
     // step 0 : désigner
     if (this.step === 0) {
       const maxDist = this.viewport.snapToleranceMeters();
-      const hit = findNearestEntity(pt, this.doc.entities, maxDist);
+      const hit = findNearestEntity(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(
           `Aucun objet dans ${this.viewport.snapRadiusPx()} px. Recliquez près d’un élément.`,
@@ -4079,9 +4095,9 @@ export class DrawingTools {
     const maxDist = this.viewport.snapToleranceMeters();
 
     if (this.step === 0) {
-      const cand = findNearestTrimCandidate(pt, this.doc.entities, maxDist);
+      const cand = findNearestTrimCandidate(pt, this.pickableEntities(), maxDist);
       if (!cand) {
-        const near = findNearestEntity(pt, this.doc.entities, maxDist);
+        const near = findNearestEntity(pt, this.pickableEntities(), maxDist);
         if (near?.entity.kind === 'object') {
           this.feedback(
             'TRIM — pas sur un objet de bibliothèque (exploser d’abord avec /explode).',
@@ -4266,7 +4282,7 @@ export class DrawingTools {
   private onCutPoint(pt: Vec3): void {
     cutAtPoint({
       pt,
-      entities: this.doc.entities,
+      entities: this.pickableEntities(),
       maxDist: this.viewport.snapToleranceMeters(),
       replace: (id, reps) => this.doc.replaceEntity(id, reps),
       feedback: (m, l) => this.feedback(m, l),
@@ -4279,7 +4295,7 @@ export class DrawingTools {
   ): PolylineEntity | null {
     let best: PolylineEntity | null = null;
     let bestD = Infinity;
-    for (const e of this.doc.entities) {
+    for (const e of this.pickableEntities()) {
       if (e.kind !== 'polyline') continue;
       const near = closestOnPolyline(e, pt);
       if (!near || near.dist > maxDist) continue;
@@ -4326,7 +4342,7 @@ export class DrawingTools {
 
     // Étape 1 — objet à allonger
     if (!this.extendSource) {
-      const hit = findNearestExtendable(pt, this.doc.entities, maxDist);
+      const hit = findNearestExtendable(pt, this.pickableEntities(), maxDist);
       if (!hit) {
         this.feedback(
           `Aucun objet prolongeable dans ${px} px (ligne, arc, bout de polyligne ouverte).`,
@@ -4379,7 +4395,7 @@ export class DrawingTools {
 
     const bound = findNearestBoundary(
       pt,
-      this.doc.entities,
+      this.pickableEntities(),
       maxDist,
       live.id,
     );
@@ -4419,7 +4435,7 @@ export class DrawingTools {
   private onDeletePickPoint(pt: Vec3): void {
     deletePickAtPoint({
       pt,
-      entities: this.doc.entities,
+      entities: this.pickableEntities(),
       maxDist: this.viewport.snapToleranceMeters(),
       snapRadiusPx: this.viewport.snapRadiusPx(),
       remove: (id) => this.doc.removeEntity(id),
@@ -4593,6 +4609,8 @@ export class DrawingTools {
     let poly = this.getActivePolyline();
     if (!poly) {
       poly = createEmptyPolyline();
+      const stroke = this.pen.strokeFields();
+      if (stroke.byLayer) poly = { ...poly, byLayer: stroke.byLayer };
       poly = appendSegment(poly, seg);
       this.doc.addEntity(poly);
       this.polyId = poly.id;
@@ -4854,11 +4872,13 @@ export class DrawingTools {
   }
 
   private onPointPlace(pt: Vec3): void {
+    const stroke = this.pen.strokeFields();
     const r = this.pen.resolved;
     placePointEntity({
       pt,
-      color: r.color,
-      lineWidth: r.lineWidth,
+      color: stroke.color,
+      lineWidth: stroke.lineWidth,
+      byLayer: stroke.byLayer,
       colorLabel: r.colorLabel,
       add: (ent) => this.doc.addEntity(ent),
       feedback: (m, l) => this.feedback(m, l),

@@ -3,6 +3,7 @@ import {
   DEFAULT_DRAW_LAYER,
   normalizeDrawLayerTable,
   parseEntityDrawLayer,
+  sanitizeByLayer,
 } from './drawLayers';
 import {
   APP_VERSION,
@@ -229,11 +230,13 @@ function stampDrawLayer(
   const drawLayer = parseEntityDrawLayer(
     (raw as { drawLayer?: unknown }).drawLayer,
   );
+  const byLayer = sanitizeByLayer((raw as { byLayer?: unknown }).byLayer);
   if (e.kind === 'object') {
     const insert = normalizeInsert((raw as { insert?: unknown }).insert);
-    return insert ? { ...e, drawLayer, insert } : { ...e, drawLayer };
+    const obj = byLayer ? { ...e, drawLayer, byLayer } : { ...e, drawLayer };
+    return insert ? { ...obj, insert } : obj;
   }
-  return { ...e, drawLayer };
+  return byLayer ? { ...e, drawLayer, byLayer } : { ...e, drawLayer };
 }
 
 /** Complète les champs de trait manquants (anciens .GKD). */
@@ -557,8 +560,12 @@ function normalizeEntityKind(
           lineStyle: (typeof r.lineStyle === 'string'
             ? r.lineStyle
             : 'plein') as import('./types').LineStyleId,
+          ...(sanitizeByLayer(r.byLayer)
+            ? { byLayer: sanitizeByLayer(r.byLayer) }
+            : {}),
         };
       }
+      const lineBy = sanitizeByLayer(r.byLayer);
       return {
         type: 'line' as const,
         start: Array.isArray(r.start)
@@ -572,6 +579,7 @@ function normalizeEntityKind(
         lineStyle: (typeof r.lineStyle === 'string'
           ? r.lineStyle
           : 'plein') as import('./types').LineStyleId,
+        ...(lineBy ? { byLayer: lineBy } : {}),
       };
     });
     return {

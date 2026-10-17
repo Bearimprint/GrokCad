@@ -13,6 +13,10 @@ export interface TextStyleState {
   height: number;
   bold: boolean;
   italic: boolean;
+  /** true = police, gras et italique du calque courant. */
+  fontByLayer: boolean;
+  /** true = couleur du calque courant. */
+  colorByLayer: boolean;
 }
 
 export interface TextPrefsFile {
@@ -35,6 +39,9 @@ export const DEFAULT_FONTS: { id: string; label: string; value: string }[] = [
   { id: 'georgia', label: 'Georgia', value: 'Georgia, serif' },
 ];
 
+/** Valeur du menu police : suivre le calque. */
+export const TEXT_FONT_BY_LAYER = '__ducalque__';
+
 export const DEFAULT_TEXT_HEIGHT = 0.25;
 export const DEFAULT_TEXTBOX_PADDING = 0.03;
 
@@ -48,6 +55,8 @@ export function defaultTextPrefs(): TextPrefsFile {
       height: DEFAULT_TEXT_HEIGHT,
       bold: false,
       italic: false,
+      fontByLayer: true,
+      colorByLayer: true,
     },
     textboxPadding: DEFAULT_TEXTBOX_PADDING,
   };
@@ -71,6 +80,15 @@ function normalize(raw: unknown): TextPrefsFile {
     }
     if (typeof c.bold === 'boolean') base.current.bold = c.bold;
     if (typeof c.italic === 'boolean') base.current.italic = c.italic;
+    const factoryFont = c.fontFamily === undefined || c.fontFamily === DEFAULT_FONTS[0]!.value;
+    base.current.fontByLayer =
+      typeof c.fontByLayer === 'boolean'
+        ? c.fontByLayer
+        : factoryFont && c.bold !== true && c.italic !== true;
+    base.current.colorByLayer =
+      typeof c.colorByLayer === 'boolean'
+        ? c.colorByLayer
+        : !c.colorId || c.colorId === 'noir';
   }
   if (
     typeof o.textboxPadding === 'number' &&
@@ -133,14 +151,44 @@ export class TextPrefsManager {
   }
 
   setFontFamily(font: string): void {
-    if (!font.trim() || font === this.prefs.current.fontFamily) return;
+    if (font === TEXT_FONT_BY_LAYER) {
+      if (this.prefs.current.fontByLayer) return;
+      this.prefs.current.fontByLayer = true;
+      this.emit();
+      return;
+    }
+    if (!font.trim()) return;
+    if (
+      font === this.prefs.current.fontFamily &&
+      !this.prefs.current.fontByLayer
+    ) {
+      return;
+    }
     this.prefs.current.fontFamily = font;
+    this.prefs.current.fontByLayer = false;
+    this.emit();
+  }
+
+  setFontByLayer(on: boolean): void {
+    if (this.prefs.current.fontByLayer === on) return;
+    this.prefs.current.fontByLayer = on;
+    this.emit();
+  }
+
+  setColorByLayer(on: boolean): void {
+    if (this.prefs.current.colorByLayer === on) return;
+    this.prefs.current.colorByLayer = on;
     this.emit();
   }
 
   setColorId(id: string): void {
-    if (id === this.prefs.current.colorId) return;
+    if (id === 'ducalque') {
+      this.setColorByLayer(true);
+      return;
+    }
+    if (id === this.prefs.current.colorId && !this.prefs.current.colorByLayer) return;
     this.prefs.current.colorId = id;
+    this.prefs.current.colorByLayer = false;
     this.emit();
   }
 
@@ -157,25 +205,31 @@ export class TextPrefsManager {
   }
 
   setBold(v: boolean): void {
-    if (v === this.prefs.current.bold) return;
+    if (v === this.prefs.current.bold && !this.prefs.current.fontByLayer) return;
     this.prefs.current.bold = v;
+    this.prefs.current.fontByLayer = false;
     this.emit();
   }
 
   setItalic(v: boolean): void {
-    if (v === this.prefs.current.italic) return;
+    if (v === this.prefs.current.italic && !this.prefs.current.fontByLayer) return;
     this.prefs.current.italic = v;
+    this.prefs.current.fontByLayer = false;
     this.emit();
   }
 
   toggleBold(): boolean {
-    this.prefs.current.bold = !this.prefs.current.bold;
+    const shown = this.prefs.current.fontByLayer ? false : this.prefs.current.bold;
+    this.prefs.current.bold = !shown;
+    this.prefs.current.fontByLayer = false;
     this.emit();
     return this.prefs.current.bold;
   }
 
   toggleItalic(): boolean {
-    this.prefs.current.italic = !this.prefs.current.italic;
+    const shown = this.prefs.current.fontByLayer ? false : this.prefs.current.italic;
+    this.prefs.current.italic = !shown;
+    this.prefs.current.fontByLayer = false;
     this.emit();
     return this.prefs.current.italic;
   }

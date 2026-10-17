@@ -4,7 +4,7 @@
  * d'une session navigateur à l'autre. Export/import JSON possible plus tard.
  */
 
-import type { LineStyleId } from './types';
+import type { ByLayerFlags, LineStyleId } from './types';
 
 export type { LineStyleId };
 
@@ -41,11 +41,18 @@ export interface StyleOption {
   pattern?: number[];
 }
 
+/** Id virtuel : l’attribut suit le calque courant. */
+export const BY_LAYER_ID = 'ducalque';
+
 /** Sélection courante du stylo (prochaine entité). */
 export interface PenState {
   colorId: string;
   widthId: string;
   styleId: LineStyleId;
+  /** true = DuCalque. Absent dans d’anciens prefs = true seulement si la valeur est encore le défaut d’usine. */
+  colorByLayer: boolean;
+  widthByLayer: boolean;
+  styleByLayer: boolean;
 }
 
 export interface PenPrefsFile {
@@ -142,6 +149,9 @@ export const DEFAULT_PEN: PenState = {
   colorId: 'noir',
   widthId: 'w1',
   styleId: 'plein',
+  colorByLayer: true,
+  widthByLayer: true,
+  styleByLayer: true,
 };
 
 export function defaultPenPrefs(): PenPrefsFile {
@@ -162,6 +172,9 @@ export function resolvePen(prefs: PenPrefsFile): {
   colorLabel: string;
   widthLabel: string;
   styleLabel: string;
+  colorByLayer: boolean;
+  widthByLayer: boolean;
+  styleByLayer: boolean;
 } {
   const color =
     prefs.colors.find((c) => c.id === prefs.current.colorId) ?? prefs.colors[0]!;
@@ -174,9 +187,12 @@ export function resolvePen(prefs: PenPrefsFile): {
     lineWidth: width.px,
     styleId: style.id,
     style,
-    colorLabel: color.label,
-    widthLabel: width.label,
-    styleLabel: style.label,
+    colorLabel: prefs.current.colorByLayer ? 'DuCalque' : color.label,
+    widthLabel: prefs.current.widthByLayer ? 'DuCalque' : width.label,
+    styleLabel: prefs.current.styleByLayer ? 'DuCalque' : style.label,
+    colorByLayer: prefs.current.colorByLayer === true,
+    widthByLayer: prefs.current.widthByLayer === true,
+    styleByLayer: prefs.current.styleByLayer === true,
   };
 }
 
@@ -236,9 +252,28 @@ function normalizePrefs(raw: unknown): PenPrefsFile {
   }
   if (o.current && typeof o.current === 'object') {
     const c = o.current as Partial<PenState>;
-    if (typeof c.colorId === 'string') base.current.colorId = c.colorId;
-    if (typeof c.widthId === 'string') base.current.widthId = c.widthId;
-    if (typeof c.styleId === 'string') base.current.styleId = c.styleId as LineStyleId;
+    if (typeof c.colorId === 'string' && c.colorId !== BY_LAYER_ID) {
+      base.current.colorId = c.colorId;
+    }
+    if (typeof c.widthId === 'string' && c.widthId !== BY_LAYER_ID) {
+      base.current.widthId = c.widthId;
+    }
+    const styleRaw = String((c as { styleId?: unknown }).styleId ?? '');
+    if (styleRaw && styleRaw !== BY_LAYER_ID) {
+      base.current.styleId = styleRaw as LineStyleId;
+    }
+    base.current.colorByLayer =
+      typeof c.colorByLayer === 'boolean'
+        ? c.colorByLayer
+        : !c.colorId || c.colorId === 'noir' || c.colorId === BY_LAYER_ID;
+    base.current.widthByLayer =
+      typeof c.widthByLayer === 'boolean'
+        ? c.widthByLayer
+        : !c.widthId || c.widthId === 'w1' || c.widthId === BY_LAYER_ID;
+    base.current.styleByLayer =
+      typeof c.styleByLayer === 'boolean'
+        ? c.styleByLayer
+        : !styleRaw || styleRaw === 'plein' || styleRaw === BY_LAYER_ID;
   }
 
   // Garantir que la sélection pointe sur une entrée existante
@@ -279,9 +314,21 @@ export type PenChangeListener = (prefs: PenPrefsFile) => void;
 export class PenManager {
   private prefs: PenPrefsFile;
   private listeners = new Set<PenChangeListener>();
+  private layerSource: (() => {
+    color: string;
+    lineWidth: number;
+    lineStyle: LineStyleId;
+  }) | null = null;
 
   constructor() {
     this.prefs = loadPenPrefs();
+  }
+
+  /** Calque courant, pour figer un aperçu quand le stylo est DuCalque. */
+  setLayerSource(
+    fn: () => { color: string; lineWidth: number; lineStyle: LineStyleId },
+  ): void {
+    this.layerSource = fn;
   }
 
   get file(): PenPrefsFile {
@@ -303,57 +350,101 @@ export class PenManager {
   }
 
   setColorId(id: string): boolean {
+    if (id === BY_LAYER_ID) {
+      this.prefs.current.colorByLayer = true;
+      this.emit();
+      return true;
+    }
     if (!this.prefs.colors.some((c) => c.id === id)) return false;
     this.prefs.current.colorId = id;
+    this.prefs.current.colorByLayer = false;
     this.emit();
     return true;
   }
 
   setWidthId(id: string): boolean {
+    if (id === BY_LAYER_ID) {
+      this.prefs.current.widthByLayer = true;
+      this.emit();
+      return true;
+    }
     if (!this.prefs.widths.some((w) => w.id === id)) return false;
     this.prefs.current.widthId = id;
+    this.prefs.current.widthByLayer = false;
     this.emit();
     return true;
   }
 
   setStyleId(id: LineStyleId | string): boolean {
+    if (id === BY_LAYER_ID) {
+      this.prefs.current.styleByLayer = true;
+      this.emit();
+      return true;
+    }
     if (!this.prefs.styles.some((s) => s.id === id)) return false;
     this.prefs.current.styleId = id as LineStyleId;
+    this.prefs.current.styleByLayer = false;
     this.emit();
     return true;
   }
 
   cycleColor(dir = 1): void {
-    const list = this.prefs.colors;
-    const i = list.findIndex((c) => c.id === this.prefs.current.colorId);
-    const n = list.length;
-    if (n === 0) return;
-    this.prefs.current.colorId = list[((i < 0 ? 0 : i) + dir + n * 10) % n]!.id;
+    const ids = [BY_LAYER_ID, ...this.prefs.colors.map((c) => c.id)];
+    const cur = this.prefs.current.colorByLayer ? BY_LAYER_ID : this.prefs.current.colorId;
+    const i = Math.max(0, ids.indexOf(cur));
+    const next = ids[(i + dir + ids.length) % ids.length]!;
+    if (next === BY_LAYER_ID) this.prefs.current.colorByLayer = true;
+    else {
+      this.prefs.current.colorByLayer = false;
+      this.prefs.current.colorId = next;
+    }
     this.emit();
   }
 
   cycleWidth(dir = 1): void {
-    const list = this.prefs.widths;
-    const i = list.findIndex((w) => w.id === this.prefs.current.widthId);
-    const n = list.length;
-    if (n === 0) return;
-    this.prefs.current.widthId = list[((i < 0 ? 0 : i) + dir + n * 10) % n]!.id;
+    const ids = [BY_LAYER_ID, ...this.prefs.widths.map((w) => w.id)];
+    const cur = this.prefs.current.widthByLayer ? BY_LAYER_ID : this.prefs.current.widthId;
+    const i = Math.max(0, ids.indexOf(cur));
+    const next = ids[(i + dir + ids.length) % ids.length]!;
+    if (next === BY_LAYER_ID) this.prefs.current.widthByLayer = true;
+    else {
+      this.prefs.current.widthByLayer = false;
+      this.prefs.current.widthId = next;
+    }
     this.emit();
   }
 
   cycleStyle(dir = 1): void {
-    const list = this.prefs.styles;
-    const i = list.findIndex((s) => s.id === this.prefs.current.styleId);
-    const n = list.length;
-    if (n === 0) return;
-    this.prefs.current.styleId = list[((i < 0 ? 0 : i) + dir + n * 10) % n]!
-      .id as LineStyleId;
+    const ids = [BY_LAYER_ID, ...this.prefs.styles.map((s) => s.id)];
+    const cur = this.prefs.current.styleByLayer ? BY_LAYER_ID : this.prefs.current.styleId;
+    const i = Math.max(0, ids.indexOf(cur));
+    const next = ids[(i + dir + ids.length) % ids.length]!;
+    if (next === BY_LAYER_ID) this.prefs.current.styleByLayer = true;
+    else {
+      this.prefs.current.styleByLayer = false;
+      this.prefs.current.styleId = next as LineStyleId;
+    }
     this.emit();
   }
 
-  /** Applique le stylo courant aux champs d'une entité. */
-  strokeFields(): { color: string; lineWidth: number; lineStyle: LineStyleId } {
+  /** Applique le stylo courant aux champs d'une entité. DuCalque pose `byLayer`. */
+  strokeFields(): {
+    color: string;
+    lineWidth: number;
+    lineStyle: LineStyleId;
+    byLayer?: ByLayerFlags;
+  } {
     const r = this.resolved;
-    return { color: r.color, lineWidth: r.lineWidth, lineStyle: r.styleId };
+    const layer = this.layerSource?.() ?? null;
+    const byLayer: ByLayerFlags = {};
+    if (r.colorByLayer) byLayer.color = true;
+    if (r.widthByLayer) byLayer.width = true;
+    if (r.styleByLayer) byLayer.style = true;
+    return {
+      color: r.colorByLayer && layer ? layer.color : r.color,
+      lineWidth: r.widthByLayer && layer ? layer.lineWidth : r.lineWidth,
+      lineStyle: r.styleByLayer && layer ? layer.lineStyle : r.styleId,
+      ...(Object.keys(byLayer).length > 0 ? { byLayer } : {}),
+    };
   }
 }

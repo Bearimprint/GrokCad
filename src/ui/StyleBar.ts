@@ -10,6 +10,7 @@ import type { PenManager, PenPrefsFile } from '../core/penPrefs';
 import { resolvePen } from '../core/penPrefs';
 import {
   DEFAULT_FONTS,
+  TEXT_FONT_BY_LAYER,
   type TextPrefsFile,
   type TextPrefsManager,
 } from '../core/textPrefs';
@@ -94,6 +95,10 @@ export class StyleBar {
     `;
 
     const fontSel = this.root.querySelector('#sb-font') as HTMLSelectElement;
+    const byLayerOpt = document.createElement('option');
+    byLayerOpt.value = TEXT_FONT_BY_LAYER;
+    byLayerOpt.textContent = 'DuCalque';
+    fontSel.appendChild(byLayerOpt);
     for (const f of DEFAULT_FONTS) {
       const opt = document.createElement('option');
       opt.value = f.value;
@@ -126,8 +131,8 @@ export class StyleBar {
       else if (el.dataset.pen === 'style') this.pen.cycleStyle(1);
       else if (el.dataset.text === 'color') this.cycleTextColor(1);
       else if (el.dataset.text === 'bg') this.cycleTextBg(1);
-      else if (el.dataset.text === 'bold') this.text.toggleBold();
-      else if (el.dataset.text === 'italic') this.text.toggleItalic();
+      else if (el.dataset.text === 'bold') this.toggleTextBold();
+      else if (el.dataset.text === 'italic') this.toggleTextItalic();
       else if (el.dataset.dim === 'edit') this.dimDialog.toggle();
     });
 
@@ -175,7 +180,11 @@ export class StyleBar {
     this.pen.onChange((p) => this.renderPen(p));
     this.text.onChange((p) => this.renderText(p));
     this.dims.onChange(() => this.renderDim());
-    this.layers.onChange(() => this.renderLayer());
+    this.layers.onChange(() => {
+      this.renderLayer();
+      this.renderPen(this.pen.file);
+      this.renderText(this.text.file);
+    });
 
     this.renderPen(this.pen.file);
     this.renderText(this.text.file);
@@ -308,11 +317,24 @@ export class StyleBar {
   private cycleTextColor(dir: number): void {
     const colors = this.pen.file.colors;
     if (!colors.length) return;
-    const ids = colors.map((c) => c.id);
-    let i = ids.indexOf(this.text.current.colorId);
+    const ids = ['ducalque', ...colors.map((c) => c.id)];
+    const cur = this.text.current.colorByLayer ? 'ducalque' : this.text.current.colorId;
+    let i = ids.indexOf(cur);
     if (i < 0) i = 0;
     i = (i + dir + ids.length) % ids.length;
     this.text.setColorId(ids[i]!);
+  }
+
+  private toggleTextBold(): void {
+    const layer = this.layers.resolved(this.layers.current);
+    const shown = this.text.current.fontByLayer ? layer.fontBold : this.text.current.bold;
+    this.text.setBold(!shown);
+  }
+
+  private toggleTextItalic(): void {
+    const layer = this.layers.resolved(this.layers.current);
+    const shown = this.text.current.fontByLayer ? layer.fontItalic : this.text.current.italic;
+    this.text.setItalic(!shown);
   }
 
   private cycleTextBg(dir: number): void {
@@ -325,8 +347,12 @@ export class StyleBar {
 
   private renderPen(prefs: PenPrefsFile): void {
     const r = resolvePen(prefs);
+    const layer = this.layers.resolved(this.layers.current);
+    const color = r.colorByLayer ? layer.color : r.color;
+    const width = r.widthByLayer ? layer.lineWidth : r.lineWidth;
+    const dashed = r.styleByLayer ? layer.lineStyle !== 'plein' : r.style.dashed;
     const sw = this.root.querySelector('#sb-pen-swatch') as HTMLElement;
-    sw.style.background = r.color;
+    sw.style.background = color;
     (this.root.querySelector('#sb-pen-color') as HTMLElement).textContent =
       r.colorLabel;
     (this.root.querySelector('#sb-pen-width') as HTMLElement).textContent =
@@ -336,29 +362,33 @@ export class StyleBar {
     const prev = this.root.querySelector(
       '#sb-pen-style-prev',
     ) as HTMLElement;
-    prev.style.borderTopStyle = r.style.dashed ? 'dashed' : 'solid';
-    prev.style.borderTopColor = r.color;
-    prev.style.borderTopWidth = `${Math.min(4, Math.max(1, r.lineWidth))}px`;
+    prev.style.borderTopStyle = dashed ? 'dashed' : 'solid';
+    prev.style.borderTopColor = color;
+    prev.style.borderTopWidth = `${Math.min(4, Math.max(1, width))}px`;
   }
 
   private renderText(prefs: TextPrefsFile): void {
     const c = prefs.current;
+    const layer = this.layers.resolved(this.layers.current);
     const fontSel = this.root.querySelector('#sb-font') as HTMLSelectElement;
-    // Si police hors liste, ajouter temporairement
-    if (![...fontSel.options].some((o) => o.value === c.fontFamily)) {
-      const opt = document.createElement('option');
-      opt.value = c.fontFamily;
-      opt.textContent = c.fontFamily.split(',')[0] ?? c.fontFamily;
-      fontSel.appendChild(opt);
+    if (c.fontByLayer) {
+      fontSel.value = TEXT_FONT_BY_LAYER;
+    } else {
+      if (![...fontSel.options].some((o) => o.value === c.fontFamily)) {
+        const opt = document.createElement('option');
+        opt.value = c.fontFamily;
+        opt.textContent = c.fontFamily.split(',')[0] ?? c.fontFamily;
+        fontSel.appendChild(opt);
+      }
+      fontSel.value = c.fontFamily;
     }
-    fontSel.value = c.fontFamily;
 
     const colors = this.pen.file.colors;
     const col = colors.find((x) => x.id === c.colorId) ?? colors[0];
     const sw = this.root.querySelector('#sb-text-swatch') as HTMLElement;
-    sw.style.background = col?.value ?? '#000';
+    sw.style.background = c.colorByLayer ? layer.color : (col?.value ?? '#000');
     (this.root.querySelector('#sb-text-color') as HTMLElement).textContent =
-      col?.label ?? c.colorId;
+      c.colorByLayer ? 'DuCalque' : (col?.label ?? c.colorId);
 
     const bgSw = this.root.querySelector('#sb-bg-swatch') as HTMLElement;
     const bgLab = this.root.querySelector('#sb-bg-label') as HTMLElement;
@@ -375,12 +405,14 @@ export class StyleBar {
     (this.root.querySelector('#sb-height') as HTMLInputElement).value = String(
       c.height,
     );
+    const boldOn = c.fontByLayer ? layer.fontBold : c.bold;
+    const italicOn = c.fontByLayer ? layer.fontItalic : c.italic;
     this.root
       .querySelector('#sb-bold')
-      ?.classList.toggle('active', c.bold);
+      ?.classList.toggle('active', boldOn);
     this.root
       .querySelector('#sb-italic')
-      ?.classList.toggle('active', c.italic);
+      ?.classList.toggle('active', italicOn);
   }
 
   private renderDim(): void {

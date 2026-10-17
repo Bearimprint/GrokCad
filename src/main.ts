@@ -3,7 +3,7 @@ import { DesignationManager } from './core/designation';
 import { DimPrefsManager } from './core/dimPrefs';
 import { CadDocument } from './core/document';
 import { runSave } from './commands/registry';
-import { DrawLayerManager, isInsertionsTab } from './core/drawLayers';
+import { DrawLayerManager, isInsertionsTab, resolveLayerStyle } from './core/drawLayers';
 import { fsRead } from './core/fsClient';
 import { createEmptyDocument, parseGkd } from './core/gkd';
 import { onHatchCacheChange } from './core/hatchCache';
@@ -56,6 +56,10 @@ document.title = `GrokCad v.${APP_VERSION}`;
 
 const doc = new CadDocument();
 const pen = new PenManager();
+pen.setLayerSource(() => {
+  const s = resolveLayerStyle(doc.currentDrawLayer, doc.drawLayerLabels);
+  return { color: s.color, lineWidth: s.lineWidth, lineStyle: s.lineStyle };
+});
 const app = new AppPrefsManager();
 const textPrefs = new TextPrefsManager();
 const dimPrefs = new DimPrefsManager();
@@ -164,7 +168,7 @@ function setDocTitle(name: string): void {
 
 function syncScene(): void {
   viewport.setHelpers(doc.helpers);
-  viewport.setEntities(doc.entities);
+  viewport.setEntities(doc.entities, doc.drawLayerLabels);
   viewport.setSelectedIds(selection.selectedIds);
   viewport.setDesignatedIds(designation.designatedIds);
   // Charger en arrière-plan les defs manquantes

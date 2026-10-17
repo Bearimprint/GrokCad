@@ -6,19 +6,28 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.25.4**
+**Version courante : 0.25.5**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.25.4
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.5
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-17 — Étape 1, calques complets (→ **0.25.5**)
+
+- Attributs des calques 1–127 dans `drawLayers` : couleur (blanc), épaisseur 1 px, style plein, police Tahoma, gras, italique, visible. Anciens `.gkd` reçoivent ces défauts sans perdre leurs entités ni leurs couleurs déjà posées.
+- **DuCalque** : un trait ou un texte sans choix explicite suit le calque. `/couleur`, `/epaisseur`, `/style` et la barre de styles figent l’attribut. Les nouveaux textes prennent la police du calque courant.
+- Un calque masqué n’est ni dessiné, ni accroché, ni sélectionnable (clic ou fenêtre). Le calque courant ne peut pas être masqué.
+- `/calques afficher|masquer|toutafficher|isoler|couleur|epaisseur|police|nom`. Dialogue : case visible, couleur, épaisseur, police, libellé. `/selcalque` (`/layersel`, `/sc`) et `/verscalque`.
+- Les calques négatifs d’insertion ne changent pas.
+- Test : `scripts/test-layer-style.mts`.
 
 ## Session 2026-10-16 — Étape 0, unités et corrections (→ **0.25.4**)
 
@@ -331,6 +340,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 | `/dist` mesure 2 points | **fait** | **0.22.5** |
 | `/grid` on\|off · `/gridsnap` on\|off | **fait** | **0.24.16** |
 | Étape 0 — tolérances, unités, DXF, découpe outils | **fait** | **0.25.4** |
+| Étape 1 — calques (attributs, DuCalque, visibilité, /selcalque) | **fait** | **0.25.5** |
 | `/join` + `/jonction` Y : BIM priorités (béton↔béton, isolant stop net) | **OK** | **0.24.10** |
 | `/jonction` T/Y multi-extrémités (cadre) | partiel | 0.18.x |
 | `/extrude` · Undo | pas commencé | — |

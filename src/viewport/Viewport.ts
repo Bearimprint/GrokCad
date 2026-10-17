@@ -4,8 +4,10 @@ import { DEFAULT_SNAP_RADIUS_PX } from '../core/appPrefs';
 import { aabbFromPoints, drawingExtentPoints } from '../core/bounds';
 import { defaultCamera } from '../core/gkd';
 import { entitiesToSnapCurves, snapAt, type SnapResult } from '../core/snap';
+import { entityLayerVisible } from '../core/drawLayers';
 import type {
   CameraState,
+  DrawLayerLabel,
   Entity,
   HelperLineEntity,
   LineStyleId,
@@ -90,6 +92,7 @@ export class Viewport {
   private mouseWorld: MouseWorld = null;
   private helpers: readonly HelperLineEntity[] = [];
   private entities: readonly Entity[] = [];
+  private drawLayers: readonly DrawLayerLabel[] = [];
   private lastSnap: SnapResult | null = null;
   private onSnap: SnapHandler | null = null;
   private onPick: PickHandler | null = null;
@@ -218,13 +221,21 @@ export class Viewport {
 
   setHelpers(helpers: readonly HelperLineEntity[]): void {
     this.helpers = helpers;
-    this.helperLayer.setHelpers(helpers);
-    this.refreshHelperClip();
+    this.refreshShownHelpers();
   }
 
-  setEntities(entities: readonly Entity[]): void {
+  setEntities(entities: readonly Entity[], layers?: readonly DrawLayerLabel[]): void {
     this.entities = entities;
+    if (layers) this.drawLayers = layers;
+    this.entityLayer.setLayerTable(this.drawLayers);
     this.entityLayer.setEntities(entities);
+    this.refreshShownHelpers();
+  }
+
+  private refreshShownHelpers(): void {
+    const shown = this.helpers.filter((h) => entityLayerVisible(h, this.drawLayers));
+    this.helperLayer.setHelpers(shown);
+    this.refreshHelperClip();
   }
 
   setPreview(
@@ -814,7 +825,12 @@ export class Viewport {
     let snap: SnapResult | null = null;
 
     if (this.isSnapEnabled()) {
-      const curves = entitiesToSnapCurves(this.helpers, this.entities, this.units);
+      const curves = entitiesToSnapCurves(
+        this.helpers,
+        this.entities,
+        this.units,
+        this.drawLayers,
+      );
       snap = snapAt(click, curves, this.snapToleranceMeters(), this.units);
     }
 

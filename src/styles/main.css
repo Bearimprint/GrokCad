@@ -244,7 +244,7 @@ body {
 }
 
 .layers-dialog {
-  width: min(520px, 96vw);
+  width: min(760px, 96vw);
   max-height: min(84vh, 720px);
 }
 
@@ -276,6 +276,48 @@ body {
   grid-template-columns: 4.2rem 1fr;
   gap: 6px;
   align-items: center;
+}
+
+.layers-row-full,
+.layers-head {
+  grid-template-columns: 1.4rem 3.4rem 2.4rem 3.2rem 7.2rem 1fr;
+}
+
+.layers-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  padding: 0 2px 4px;
+}
+
+.layers-row.is-hidden {
+  opacity: 0.45;
+}
+
+.layers-vis {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.layers-color {
+  width: 2.2rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+}
+
+.layers-width,
+.layers-font {
+  width: 100%;
+  padding: 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-size: 12px;
 }
 
 .layers-row.current .layers-id {

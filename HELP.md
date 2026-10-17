@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.25.4**  
+> Version de référence : **0.25.5**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -184,14 +184,28 @@ Détails : `WALLS.md` · `JONCTION.md`.
 
 Pas de couche **0**. Le numéro = ordre de dessin : **1** en premier (fond), **127** en dernier (devant). Un grand rectangle plein blanc sur 127 masque tout ce qui est en dessous.
 
-Chaque calque a un **libellé de 255 caractères** max. Défaut : `Couche numero 7` (pour 7). La couche 1 s’appelle **Bedrock layer**. Anciens `.gkd` sans calques : toutes les entités → couche **1**, **sans** calques négatifs.
+Chaque calque a un **libellé de 255 caractères** max. Défaut : `Couche numero 7` (pour 7). La couche 1 s’appelle **Bedrock layer**. Anciens `.gkd` sans calques : toutes les entités → couche **1**, **sans** calques négatifs. Leurs couleurs déjà enregistrées sont conservées.
+
+Attributs de chaque calque normal (1–127), défauts identiques : couleur **blanche**, épaisseur **1 px**, trait **plein**, police **Tahoma** (ni gras ni italique), **visible**. Un objet sans choix explicite de stylo ou de texte suit son calque (**DuCalque**). `/couleur`, `/epaisseur`, `/style` ou la barre de styles figent cet attribut. Les calques négatifs d’insertion ne changent pas.
+
+Un calque masqué n’est ni dessiné, ni accroché, ni sélectionnable. Rien n’est effacé. Le **calque courant ne peut pas être masqué**.
 
 | Commande | Alias | Description |
 |----------|-------|-------------|
-| `/calques` | `/layers` `/couches` | Dialogue : liste + libellés éditables |
-| `/couche` | `/layer` `/calque` `/cl` | `[n°]` = calque courant, sans arg = dialogue |
+| `/calques` | `/layers` `/couches` | Sans argument : dialogue (visible, couleur, épaisseur, police, libellé) |
+| `/calques afficher n` | | Affiche `n`, plusieurs numéros, ou une plage `5-10` |
+| `/calques masquer n` | | Masque. `masquer n m`, `masquer 5-10`. Le courant est refusé |
+| `/calques toutafficher` | | Réaffiche tous les calques |
+| `/calques isoler n` | | Masque tous les autres. Le courant, s’il est différent, reste affiché |
+| `/calques couleur n #RRGGBB` | | Couleur du calque (`blanc`, `noir`, `rouge`… acceptés) |
+| `/calques epaisseur n px` | | Épaisseur 1–7. Ex. `/calques epaisseur 3 2` |
+| `/calques police n Tahoma` | | Police des textes DuCalque |
+| `/calques nom n libellé` | | Libellé |
+| `/couche` | `/layer` `/calque` `/cl` | `[n°]` = calque courant, sans arg = dialogue. Les verbes ci-dessus marchent aussi |
+| `/selcalque` | `/layersel` `/sc` | Sélectionne les éléments **visibles** du ou des calques (`n`, `n m`, `5-10`) |
+| `/verscalque` | `/vers-calque` | Envoie la sélection sur le calque `n` |
 
-Dans la **barre supérieure** : n° de calque. Clic = liste (n° + libellé). Le prochain objet (comme la couleur) prend ce calque.
+Dans la **barre supérieure** : n° de calque. Clic = liste (n° + libellé). Le prochain objet prend ce calque. **DuCalque** est le premier choix de couleur, d’épaisseur, de style et de police.
 
 ### Calques d’insertion (−1…−127)
 
@@ -312,9 +326,9 @@ Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge 
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.25.4
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.5
 ```
 
 ---
 
-*GrokCAD v0.25.4 — aide commandes*
+*GrokCAD v0.25.5 — aide commandes*

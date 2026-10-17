@@ -35,6 +35,8 @@ import { objectInstanceStrokes } from './objectInstance';
 import { wallEntityStrokes } from './walls';
 import type { UnitId } from './units';
 import { metersToDoc, TOL_M } from './tolerances';
+import { entityLayerVisible } from './drawLayers';
+import type { DrawLayerLabel } from './types';
 
 const EPS = 1e-9;
 /** Extrémités quasi confondues, en mètres (~0,5 mm). */
@@ -70,9 +72,11 @@ export function entitiesToSnapCurves(
   helpers: readonly HelperLineEntity[],
   entities: readonly Entity[],
   unit: UnitId = 'm',
+  layers?: readonly DrawLayerLabel[],
 ): SnapCurve[] {
   const out: SnapCurve[] = [];
   for (const h of helpers) {
+    if (layers && !entityLayerVisible(h, layers)) continue;
     out.push({
       id: h.id,
       type: 'infinite',
@@ -82,6 +86,7 @@ export function entitiesToSnapCurves(
   }
   const openings = collectWallOpenings(entities);
   for (const e of entities) {
+    if (layers && !entityLayerVisible(e, layers)) continue;
     if (e.kind === 'line') {
       out.push({ id: e.id, type: 'segment', a: e.start, b: e.end });
     } else if (e.kind === 'wall') {

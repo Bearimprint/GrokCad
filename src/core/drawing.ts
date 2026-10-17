@@ -2,6 +2,7 @@ import { dist, len, normalize, sub, v3 } from './geometry';
 import type { LineStyleId } from './penPrefs';
 import type {
   ArcEntity,
+  ByLayerFlags,
   CircleEntity,
   LineEntity,
   PointEntity,
@@ -25,6 +26,7 @@ export interface StrokeOpts {
   lineStyle: LineStyleId;
   layer?: string;
   id?: string;
+  byLayer?: ByLayerFlags;
 }
 
 export function createLineEntity(start: Vec3, end: Vec3, stroke: StrokeOpts): LineEntity {
@@ -37,6 +39,7 @@ export function createLineEntity(start: Vec3, end: Vec3, stroke: StrokeOpts): Li
     color: stroke.color,
     lineWidth: stroke.lineWidth,
     lineStyle: stroke.lineStyle,
+    ...(stroke.byLayer ? { byLayer: stroke.byLayer } : {}),
   };
 }
 
@@ -74,6 +77,7 @@ export function createArcEntity(
     color: stroke.color,
     lineWidth: stroke.lineWidth,
     lineStyle: stroke.lineStyle,
+    ...(stroke.byLayer ? { byLayer: stroke.byLayer } : {}),
   };
 }
 
@@ -92,6 +96,7 @@ export function createCircleEntity(
     color: stroke.color,
     lineWidth: stroke.lineWidth,
     lineStyle: stroke.lineStyle,
+    ...(stroke.byLayer ? { byLayer: stroke.byLayer } : {}),
   };
 }
 
@@ -104,6 +109,7 @@ export function createPointEntity(
     layer?: string;
     drawLayer?: number;
     id?: string;
+    byLayer?: ByLayerFlags;
   },
 ): PointEntity {
   return {
@@ -114,6 +120,7 @@ export function createPointEntity(
     position: [position[0], position[1], position[2]],
     color: opts.color,
     lineWidth: Math.max(1, Math.min(7, Math.round(opts.lineWidth) || 1)),
+    ...(opts.byLayer ? { byLayer: opts.byLayer } : {}),
   };
 }
 
@@ -134,6 +141,7 @@ export interface TextOpts {
   id?: string;
   /** Lien vers une cotation (libellé de côte). */
   dimId?: string;
+  byLayer?: ByLayerFlags;
 }
 
 /** Texte 2D (/text, /textbox, import DXF, libellés de cotation). */
@@ -156,6 +164,7 @@ export function createTextEntity(position: Vec3, opts: TextOpts): TextEntity {
     boxed: opts.boxed,
     boxPadding: opts.boxPadding,
     dimId: opts.dimId,
+    ...(opts.byLayer ? { byLayer: opts.byLayer } : {}),
   };
 }
 

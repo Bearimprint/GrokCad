@@ -11,6 +11,8 @@ import {
   type StrokeOpts,
 } from './drawing';
 import { dist, normalize, sub } from './geometry';
+import { effectiveStroke } from './drawLayers';
+import type { DrawLayerLabel } from './types';
 import type {
   ArcEntity,
   Entity,
@@ -51,6 +53,7 @@ export function lineSegFromPoints(
     color: stroke.color,
     lineWidth: stroke.lineWidth,
     lineStyle: stroke.lineStyle,
+    ...(stroke.byLayer ? { byLayer: stroke.byLayer } : {}),
   };
 }
 
@@ -75,6 +78,7 @@ export function createPolylineFromPoints(
   }
   if (n === 0) return null;
   if (opts?.closed) poly = { ...poly, closed: true };
+  if (stroke.byLayer) poly = { ...poly, byLayer: stroke.byLayer };
   return poly;
 }
 
@@ -126,6 +130,7 @@ export function arcSegFromArc(arc: ArcEntity): PolylineArcSeg {
     color: arc.color,
     lineWidth: arc.lineWidth,
     lineStyle: arc.lineStyle,
+    ...(arc.byLayer ? { byLayer: arc.byLayer } : {}),
   };
 }
 
@@ -214,18 +219,31 @@ export interface PolylineStroke {
 export function polylineStrokes(
   poly: PolylineEntity,
   arcSamples = 48,
+  table?: readonly DrawLayerLabel[],
 ): PolylineStroke[] {
   const out: PolylineStroke[] = [];
+  const paint = (s: PolylineSegment) =>
+    effectiveStroke(
+      {
+        drawLayer: poly.drawLayer,
+        color: s.color,
+        lineWidth: s.lineWidth,
+        lineStyle: s.lineStyle,
+        byLayer: s.byLayer ?? poly.byLayer,
+      },
+      table,
+    );
   for (const s of poly.segments) {
+    const eff = paint(s);
     if (s.type === 'line') {
       out.push({
         points: [
           [s.start[0], s.start[1], s.start[2]],
           [s.end[0], s.end[1], s.end[2]],
         ],
-        color: s.color,
-        lineWidth: s.lineWidth,
-        lineStyle: s.lineStyle,
+        color: eff.color,
+        lineWidth: eff.lineWidth,
+        lineStyle: eff.lineStyle,
       });
     } else {
       const arc: ArcEntity = {
@@ -243,9 +261,9 @@ export function polylineStrokes(
       };
       out.push({
         points: sampleArc(arc, arcSamples),
-        color: s.color,
-        lineWidth: s.lineWidth,
-        lineStyle: s.lineStyle,
+        color: eff.color,
+        lineWidth: eff.lineWidth,
+        lineStyle: eff.lineStyle,
       });
     }
   }
@@ -263,6 +281,7 @@ export function explodePolyline(poly: PolylineEntity): Entity[] {
           lineWidth: s.lineWidth,
           lineStyle: s.lineStyle,
           layer: poly.layer,
+          byLayer: s.byLayer ?? poly.byLayer,
         }),
       );
     } else {
@@ -279,6 +298,10 @@ export function explodePolyline(poly: PolylineEntity): Entity[] {
         color: s.color,
         lineWidth: s.lineWidth,
         lineStyle: s.lineStyle,
+        ...(s.byLayer || poly.byLayer
+          ? { byLayer: s.byLayer ?? poly.byLayer }
+          : {}),
+        ...(poly.drawLayer !== undefined ? { drawLayer: poly.drawLayer } : {}),
       };
       parts.push(arc);
     }

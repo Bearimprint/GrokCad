@@ -52,6 +52,18 @@ export type LineStyleId =
   | 'tiret_point_point'
   | 'long_tiret';
 
+/**
+ * Attributs qui suivent le calque (« DuCalque »).
+ * Absent ou false = valeur stockée sur l’entité (anciens .gkd, ou choix explicite).
+ */
+export interface ByLayerFlags {
+  color?: boolean;
+  width?: boolean;
+  style?: boolean;
+  /** Police, gras et italique du calque (textes). */
+  font?: boolean;
+}
+
 export interface EntityBase {
   id: string;
   kind: EntityKind;
@@ -64,6 +76,8 @@ export interface EntityBase {
   drawLayer?: number;
   /** true = ligne d'aide (sous-couche, snap, effaçable en masse). */
   isHelper?: boolean;
+  /** Héritage du calque. Les anciens fichiers n’ont pas ce champ. */
+  byLayer?: ByLayerFlags;
 }
 
 /**
@@ -138,6 +152,7 @@ export interface PolylineLineSeg {
   color: string;
   lineWidth: number;
   lineStyle: LineStyleId;
+  byLayer?: ByLayerFlags;
 }
 
 export interface PolylineArcSeg {
@@ -151,6 +166,7 @@ export interface PolylineArcSeg {
   color: string;
   lineWidth: number;
   lineStyle: LineStyleId;
+  byLayer?: ByLayerFlags;
 }
 
 export type PolylineSegment = PolylineLineSeg | PolylineArcSeg;
@@ -488,8 +504,20 @@ export interface ObjectDef {
 
 export interface DrawLayerLabel {
   id: number;
-  /** 255 caractères max. */
+  /** 255 caractères max. Vide = libellé par défaut. */
   label: string;
+  /** #RRGGBB. Absent = blanc. */
+  color?: string;
+  /** Épaisseur écran en px. Absent = 1. */
+  lineWidth?: number;
+  /** Absent = plein. */
+  lineStyle?: LineStyleId;
+  /** Absent = Tahoma. */
+  fontFamily?: string;
+  fontBold?: boolean;
+  fontItalic?: boolean;
+  /** Absent = visible. Le masquage est enregistré dans le .gkd. */
+  visible?: boolean;
 }
 
 export interface GkdDocument {
@@ -517,5 +545,5 @@ export interface GkdDocument {
   };
 }
 
-export const APP_VERSION = '0.25.4';
+export const APP_VERSION = '0.25.5';
 export const GKD_MAGIC = 'GKD1' as const;

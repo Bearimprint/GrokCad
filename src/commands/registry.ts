@@ -2,12 +2,16 @@ import type { AppPrefsManager } from '../core/appPrefs';
 import type { CadDocument } from '../core/document';
 import {
   DRAW_LAYER_MAX,
+  entityIdsOnLayers,
   hasAnchorPoint,
   hasInsertLayers,
   INSERTION_CATEGORY_LABELS,
   INSERTIONS_TAB,
+  interpretLayerArgs,
   isDrawLayerId,
   isInsertionsTab,
+  isLayerVerb,
+  isPositiveDrawLayer,
   type InsertCategory,
 } from '../core/drawLayers';
 import { parseAbsoluteXyz } from '../core/geometry';
@@ -123,6 +127,16 @@ export interface CommandDef {
   summary: string;
   usage?: string;
   run: (ctx: CommandContext, args: string[]) => void | Promise<void>;
+}
+
+function runLayerLine(ctx: CommandContext, args: string[]): void {
+  const parsed = interpretLayerArgs(args);
+  if (!parsed.ok) {
+    ctx.feedback(parsed.error, 'err');
+    return;
+  }
+  const result = ctx.layers.applyEdit(parsed.edit);
+  ctx.feedback(result.message, result.ok ? 'ok' : 'warn');
 }
 
 const commands: CommandDef[] = [
@@ -1039,9 +1053,14 @@ const commands: CommandDef[] = [
       if (pts && pts.length >= 1) {
         ctx.tools.cancel(false);
         const r = ctx.pen.resolved;
+        const stroke = ctx.pen.strokeFields();
         for (const p of pts) {
           ctx.doc.addEntity(
-            createPointEntity(p, { color: r.color, lineWidth: r.lineWidth }),
+            createPointEntity(p, {
+              color: stroke.color,
+              lineWidth: stroke.lineWidth,
+              byLayer: stroke.byLayer,
+            }),
           );
         }
         ctx.feedback(
@@ -1538,15 +1557,21 @@ const commands: CommandDef[] = [
     name: 'calques',
     aliases: ['layers', 'couches', 'layerlist'],
     summary:
-      'Liste des calques 1–127 (libellé 255 car.). En édition insertions : aussi −1…−127',
-    run: (ctx) => {
-      ctx.layersDialog.toggle();
-      ctx.feedback(
-        ctx.layersDialog.isOpen()
-          ? 'Calques — clic = courant, libellé éditable (255 car.).'
-          : 'Calques fermé.',
-        'info',
-      );
+      'Calques 1–127 : dialogue, ou afficher / masquer / isoler / couleur / épaisseur / police / nom',
+    usage:
+      '[afficher n | masquer n [m|5-10] | toutafficher | isoler n | couleur n #RRGGBB | epaisseur n px | police n Tahoma | nom n libellé]',
+    run: (ctx, args) => {
+      if (!args || args.length === 0) {
+        ctx.layersDialog.toggle();
+        ctx.feedback(
+          ctx.layersDialog.isOpen()
+            ? 'Calques — visible, couleur, épaisseur, police, libellé. Clic sur le n° = courant.'
+            : 'Calques fermé.',
+          'info',
+        );
+        return;
+      }
+      runLayerLine(ctx, args);
     },
   },
   {
@@ -1555,6 +1580,10 @@ const commands: CommandDef[] = [
     summary: 'Calque courant du prochain objet (1–127, ou −1…−127 en insertions)',
     usage: '[n°]  ou sans arg = dialogue',
     run: (ctx, args) => {
+      if (args.length > 0 && isLayerVerb(args[0]!)) {
+        runLayerLine(ctx, args);
+        return;
+      }
       if (args.length === 0) {
         ctx.layersDialog.open();
         ctx.feedback(
@@ -1578,11 +1607,75 @@ const commands: CommandDef[] = [
         );
         return;
       }
+      const wasHidden = n > 0 && !ctx.layers.resolved(n).visible;
       if (!ctx.layers.setCurrent(n)) {
         ctx.feedback(`Impossible d’activer le calque ${n}.`, 'err');
         return;
       }
-      ctx.feedback(`Calque → ${n}  ${ctx.layers.label(n)}`, 'ok');
+      ctx.feedback(
+        wasHidden
+          ? `Calque → ${n}  ${ctx.layers.label(n)} (affiché : le calque courant ne peut pas rester masqué).`
+          : `Calque → ${n}  ${ctx.layers.label(n)}`,
+        'ok',
+      );
+    },
+  },
+  {
+    name: 'selcalque',
+    aliases: ['layersel', 'sc'],
+    summary: 'Sélectionne les éléments visibles des calques indiqués',
+    usage: 'n [m … | 5-10]',
+    run: (ctx, args) => {
+      const parsed = interpretLayerArgs(['afficher', ...args]);
+      if (!parsed.ok || parsed.edit.kind !== 'show') {
+        ctx.feedback(parsed.ok ? 'Usage : /selcalque n [m | 5-10]' : parsed.error, 'err');
+        return;
+      }
+      const ids = entityIdsOnLayers(
+        ctx.doc.entities,
+        parsed.edit.ids,
+        ctx.doc.drawLayerLabels,
+      );
+      ctx.selection.set(ids);
+      ctx.feedback(
+        ids.length === 0
+          ? `Aucun élément visible sur ${parsed.edit.ids.join(', ')}.`
+          : `${ids.length} élément(s) sélectionné(s) sur le calque ${parsed.edit.ids.join(', ')}.`,
+        ids.length === 0 ? 'warn' : 'ok',
+      );
+    },
+  },
+  {
+    name: 'verscalque',
+    aliases: ['vers-calque', 'tolayer', 'chlayer'],
+    summary: 'Envoie la sélection sur un autre calque',
+    usage: 'n',
+    run: (ctx, args) => {
+      if (ctx.selection.size === 0) {
+        ctx.feedback('Aucune sélection. /selcalque ou un cadre, puis /verscalque n.', 'warn');
+        return;
+      }
+      const n = Number(String(args[0] ?? '').replace(',', '.'));
+      if (!isDrawLayerId(n)) {
+        ctx.feedback(`Calque invalide « ${args[0] ?? ''} ». 1–${DRAW_LAYER_MAX}.`, 'err');
+        return;
+      }
+      if (n < 0 && !ctx.layers.showSpecialId) {
+        ctx.feedback(
+          'Les calques négatifs ne s’utilisent qu’en création / modification d’un objet library/insertions/.',
+          'err',
+        );
+        return;
+      }
+      if (!isPositiveDrawLayer(n) && n > 0) {
+        ctx.feedback(`Calque invalide ${n}.`, 'err');
+        return;
+      }
+      const count = ctx.doc.assignDrawLayer(ctx.selection.selectedIds, n);
+      ctx.feedback(
+        `${count} élément(s) → calque ${n}  ${ctx.layers.label(n)}.`,
+        count > 0 ? 'ok' : 'warn',
+      );
     },
   },
   {
@@ -1693,6 +1786,11 @@ const commands: CommandDef[] = [
         return;
       }
       const tok = args[0]!.toLowerCase();
+      if (tok === 'ducalque' || tok === 'bylayer' || tok === 'ducouche') {
+        ctx.pen.setColorId('ducalque');
+        ctx.feedback('Couleur → DuCalque', 'ok');
+        return;
+      }
       const colors = ctx.pen.file.colors;
       const byId = colors.find((c) => c.id === tok || c.label.toLowerCase() === tok);
       if (byId) {
@@ -1736,6 +1834,11 @@ const commands: CommandDef[] = [
         return;
       }
       const tok = args[0]!.toLowerCase();
+      if (tok === 'ducalque' || tok === 'bylayer' || tok === 'ducouche') {
+        ctx.pen.setWidthId('ducalque');
+        ctx.feedback('Épaisseur → DuCalque', 'ok');
+        return;
+      }
       const widths = ctx.pen.file.widths;
       const n = Number(tok);
       if (Number.isFinite(n)) {
@@ -1770,6 +1873,11 @@ const commands: CommandDef[] = [
         return;
       }
       const tok = args[0]!.toLowerCase().replace(/-/g, '_');
+      if (tok === 'ducalque' || tok === 'bylayer' || tok === 'ducouche') {
+        ctx.pen.setStyleId('ducalque');
+        ctx.feedback('Style → DuCalque', 'ok');
+        return;
+      }
       const aliases: Record<string, string> = {
         solid: 'plein',
         continuous: 'plein',
