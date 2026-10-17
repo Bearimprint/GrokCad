@@ -24,6 +24,11 @@ import type {
 } from './types';
 import { APP_VERSION } from './types';
 import { UNIT_TO_METERS } from './units';
+import {
+  clipWallStrokes,
+  collectWallOpenings,
+  type OpeningInterval,
+} from './insertOpening';
 import { wallEntityStrokes } from './walls';
 
 const DRAW_LAYER = 'DESSIN';
@@ -221,8 +226,10 @@ interface ImportCtx {
   layers: Map<string, LayerInfo>;
   blocks: Map<string, Entity[]>;
   warnings: string[];
-  /** Profondeur INSERT (anti-récursion). */
+  /** Profondeur INSERT (anti-récursion). Muté sur ce même objet. */
   insertDepth: number;
+  /** Blocs en cours de lecture ou d'expansion (références circulaires). */
+  expanding: Set<string>;
 }
 
 /**
@@ -241,21 +248,15 @@ export function parseDxf(
   const insUnits = readHeaderInsUnits(pairs);
   const scale = dxfScaleToDoc(insUnits, units);
   const layers = readLayerTable(pairs);
-  const blocks = readBlocks(pairs, {
+  const ctx: ImportCtx = {
     scale,
     layers,
     blocks: new Map(),
     warnings,
     insertDepth: 0,
-  });
-
-  const ctx: ImportCtx = {
-    scale,
-    layers,
-    blocks,
-    warnings,
-    insertDepth: 0,
+    expanding: new Set(),
   };
+  readBlocks(pairs, ctx);
 
   const entities = readEntitiesSection(pairs, ctx);
 
@@ -399,8 +400,8 @@ function readLayerTable(pairs: DxfPair[]): Map<string, LayerInfo> {
   return layers;
 }
 
-function readBlocks(pairs: DxfPair[], baseCtx: ImportCtx): Map<string, Entity[]> {
-  const blocks = new Map<string, Entity[]>();
+function readBlocks(pairs: DxfPair[], ctx: ImportCtx): Map<string, Entity[]> {
+  const blocks = ctx.blocks;
   let inBlocks = false;
   let i = 0;
   while (i < pairs.length) {
@@ -428,17 +429,15 @@ function readBlocks(pairs: DxfPair[], baseCtx: ImportCtx): Map<string, Entity[]>
         i = n;
       });
       const name = last(header, 2, '').trim();
+      const blockKey = name.toUpperCase();
       const base: Vec3 = [
         num(last(header, 10)),
         num(last(header, 20)),
         num(last(header, 30)),
       ];
       const ents: Entity[] = [];
-      const ctx: ImportCtx = {
-        ...baseCtx,
-        blocks, // blocs déjà parsés (ordre DXF)
-        insertDepth: 0,
-      };
+      if (blockKey) ctx.expanding.add(blockKey);
+      try {
       while (i < pairs.length) {
         const q = pairs[i]!;
         if (q.code === 0) {
@@ -456,6 +455,9 @@ function readBlocks(pairs: DxfPair[], baseCtx: ImportCtx): Map<string, Entity[]>
           continue;
         }
         i += 1;
+      }
+      } finally {
+        if (blockKey) ctx.expanding.delete(blockKey);
       }
       // Origine du bloc : soustraire base point
       const shifted =
@@ -885,11 +887,16 @@ function readInsertEntity(
   const f = readEntityFields(pairs, getI, setI);
   const name = last(f, 2, '').trim();
   if (!name) return [];
-  if (ctx.insertDepth > 8) {
-    ctx.warnings.push(`INSERT ${name} : profondeur de blocs max atteinte.`);
+  const key = name.toUpperCase();
+  if (ctx.insertDepth > 8 || ctx.expanding.has(key)) {
+    ctx.warnings.push(
+      ctx.expanding.has(key)
+        ? `INSERT « ${name} » : référence circulaire de bloc.`
+        : `INSERT ${name} : profondeur de blocs max atteinte.`,
+    );
     return [];
   }
-  const block = ctx.blocks.get(name.toUpperCase());
+  const block = ctx.blocks.get(key);
   if (!block || block.length === 0) {
     // Bloc vide ou *Model_Space — ignorer sans flood de warnings
     if (!name.startsWith('*')) {
@@ -910,15 +917,22 @@ function readInsertEntity(
   const rowSp = sc(num(last(f, 45)), ctx);
 
   const out: Entity[] = [];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const ox = ip[0] + c * colSp;
-      const oy = ip[1] + r * rowSp;
-      const oz = ip[2];
-      for (const e of block) {
-        out.push(transformEntity(e, ox, oy, oz, sx, sy, sz, rot));
+  ctx.insertDepth += 1;
+  ctx.expanding.add(key);
+  try {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const ox = ip[0] + c * colSp;
+        const oy = ip[1] + r * rowSp;
+        const oz = ip[2];
+        for (const e of block) {
+          out.push(transformEntity(e, ox, oy, oz, sx, sy, sz, rot));
+        }
       }
     }
+  } finally {
+    ctx.expanding.delete(key);
+    ctx.insertDepth -= 1;
   }
   return out;
 }
@@ -1054,16 +1068,24 @@ function boundsOfEntities(
 
 // —— Export ——
 
-/** INSUNITS DXF : 0=Unitless, 4=mm, 5=cm, 6=m, 1=in… */
+/**
+ * INSUNITS DXF : 1=pouce, 2=pied, 4=mm, 5=cm, 6=m, 7=km.
+ * (0 = sans unité — plus utilisé pour le kilomètre.)
+ */
 function insUnits(u: UnitId | undefined): number {
   switch (u) {
+    case 'in':
+      return 1;
+    case 'ft':
+      return 2;
     case 'mm':
       return 4;
     case 'cm':
       return 5;
-    case 'km':
-      return 0;
     case 'm':
+      return 6;
+    case 'km':
+      return 7;
     default:
       return 6;
   }
@@ -1124,7 +1146,7 @@ export function serializeDxf(
     }
     if (e.kind === 'object') {
       const def = objectDefCache.get(e.libTab, e.libName);
-      const parts = expandObjectEntities(e, def);
+      const parts = expandObjectEntities(e, def, source);
       if (parts.length === 0) {
         warnings.push(
           `Objet library ${e.libTab}/${e.libName} non chargé — ignoré à l’export.`,
@@ -1139,6 +1161,7 @@ export function serializeDxf(
 
   let body = '';
   let count = 0;
+  const openings = collectWallOpenings(source);
 
   for (const e of flat) {
     if (e.kind === 'line') {
@@ -1154,7 +1177,7 @@ export function serializeDxf(
       body += writeText(e);
       count += 1;
     } else if (e.kind === 'wall') {
-      const n = writeWall(e);
+      const n = writeWall(e, openings);
       body += n.text;
       count += n.count;
     }
@@ -1287,8 +1310,11 @@ function writeArc(e: ArcEntity): string {
   return s;
 }
 
-function writeWall(e: WallEntity): { text: string; count: number } {
-  const strokes = wallEntityStrokes(e, 64);
+function writeWall(
+  e: WallEntity,
+  openings: readonly OpeningInterval[],
+): { text: string; count: number } {
+  const strokes = clipWallStrokes(e, wallEntityStrokes(e, 64), openings);
   let text = '';
   let count = 0;
   for (const st of strokes) {

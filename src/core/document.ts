@@ -1,3 +1,10 @@
+import {
+  clampLayerLabel,
+  DEFAULT_DRAW_LAYER,
+  isDrawLayerId,
+  parseEntityDrawLayer,
+  type DrawLayerLabel,
+} from './drawLayers';
 import { createEmptyDocument } from './gkd';
 import type {
   ArcEntity,
@@ -18,11 +25,11 @@ import {
 import type { Vec3 } from './types';
 import type { Aabb2 } from './selection';
 import { stretchDocument } from './stretch';
-import type { UnitId } from './units';
+import { isUnitId, type UnitId } from './units';
+import { metersToDoc, TOL_M } from './tolerances';
 import {
   applyWallJointsToEntities,
   snapAndRejoinWallsInBox,
-  WALL_REJOIN_SNAP_TOL,
   type JonctionStrategyId,
 } from './walls';
 
@@ -173,24 +180,70 @@ export class CadDocument {
     this.emit();
   }
 
+  get currentDrawLayer(): number {
+    return parseEntityDrawLayer(this._doc.currentDrawLayer);
+  }
+
+  setCurrentDrawLayer(id: number): void {
+    const n = isDrawLayerId(id) ? id : DEFAULT_DRAW_LAYER;
+    if (this._doc.currentDrawLayer === n) return;
+    this._doc.currentDrawLayer = n;
+    this.touch();
+    this.emit();
+  }
+
+  get drawLayerLabels(): readonly DrawLayerLabel[] {
+    return this._doc.drawLayers ?? [];
+  }
+
+  setDrawLayerLabel(id: number, label: string): void {
+    if (!isDrawLayerId(id)) return;
+    const trimmed = clampLayerLabel(label);
+    const list = [...(this._doc.drawLayers ?? [])];
+    const i = list.findIndex((l) => l.id === id);
+    if (!trimmed.trim()) {
+      if (i >= 0) list.splice(i, 1);
+    } else if (i >= 0) {
+      list[i] = { id, label: trimmed };
+    } else {
+      list.push({ id, label: trimmed });
+      list.sort((a, b) => a.id - b.id);
+    }
+    this._doc.drawLayers = list;
+    this.touch();
+    this.emit();
+  }
+
+  private stampDrawLayer(entity: Entity): Entity {
+    if (isDrawLayerId(entity.drawLayer ?? NaN)) return entity;
+    return { ...entity, drawLayer: this.currentDrawLayer };
+  }
+
   addEntity(entity: Entity): void {
-    this._doc.entities.push(entity);
-    if (entity.kind === 'wall') this.rejoinWalls();
+    const e = this.stampDrawLayer(entity);
+    this._doc.entities.push(e);
+    if (e.kind === 'wall') this.rejoinWalls();
     this.touch();
     this.emit();
   }
 
   addEntities(entities: Entity[]): void {
     if (entities.length === 0) return;
-    this._doc.entities.push(...entities);
-    if (entities.some((e) => e.kind === 'wall')) this.rejoinWalls();
+    const stamped = entities.map((e) => this.stampDrawLayer(e));
+    this._doc.entities.push(...stamped);
+    if (stamped.some((e) => e.kind === 'wall')) this.rejoinWalls();
     this.touch();
     this.emit();
   }
 
   /** Recalcule les onglets (miter) entre murs linéaires qui se touchent. */
   rejoinWalls(): void {
-    this._doc.entities = applyWallJointsToEntities(this._doc.entities);
+    this._doc.entities = applyWallJointsToEntities(
+      this._doc.entities,
+      undefined,
+      'first-hit',
+      this.units,
+    );
   }
 
   /** Retire une entité par id. */
@@ -320,6 +373,7 @@ export class CadDocument {
       dx,
       dy,
       dz,
+      this.units,
     );
     if (changed > 0) {
       this._doc.entities = entities;
@@ -335,7 +389,7 @@ export class CadDocument {
    */
   rejoinWallsInBox(
     box: Aabb2,
-    snapTol = WALL_REJOIN_SNAP_TOL,
+    snapTol?: number,
     strategy: JonctionStrategyId = 'first-hit',
   ): {
     wallsTouched: number;
@@ -350,8 +404,9 @@ export class CadDocument {
     const result = snapAndRejoinWallsInBox(
       this._doc.entities,
       box,
-      snapTol,
+      snapTol ?? metersToDoc(TOL_M.wallRejoinSnap, this.units),
       strategy,
+      this.units,
     );
     if (result.wallsTouched > 0 || result.clusters > 0 || result.extended > 0) {
       this._doc.entities = result.entities;
@@ -363,6 +418,7 @@ export class CadDocument {
         this._doc.entities,
         undefined,
         strategy,
+        this.units,
       );
       this.touch();
       this.emit();
@@ -392,6 +448,7 @@ export class CadDocument {
         entities,
         undefined,
         strategy,
+        this.units,
       );
     } else {
       this._doc.entities = entities.map((e) => ({ ...e })) as Entity[];
@@ -411,7 +468,7 @@ export class CadDocument {
     }
     const src = this._doc.entities.filter((e) => set.has(e.id));
     if (src.length === 0) return [];
-    const copies = cloneAndTranslate(src, dx, dy, dz);
+    const copies = cloneAndTranslate(src, dx, dy, dz, this.units);
     this._doc.entities.push(...copies);
     this.rejoinWalls();
     this.touch();
@@ -481,7 +538,7 @@ export class CadDocument {
 
   get units(): UnitId {
     const u = this._doc.meta?.units;
-    return u === 'km' || u === 'm' || u === 'cm' || u === 'mm' ? u : 'm';
+    return isUnitId(u) ? u : 'm';
   }
 
   setUnits(unit: UnitId, opts?: { dirty?: boolean }): void {
@@ -632,6 +689,8 @@ export class CadDocument {
         ...s,
         lines: s.lines.map((l) => ({ ...l })),
       })),
+      drawLayers: (this._doc.drawLayers ?? []).map((l) => ({ ...l })),
+      currentDrawLayer: this.currentDrawLayer,
       camera: { ...camera },
       modified: new Date().toISOString(),
     };

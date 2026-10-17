@@ -3,15 +3,17 @@
  * La grille est toujours exprimée en mètres réels (défaut 1 m entre carrés).
  */
 
-export type UnitId = 'km' | 'm' | 'cm' | 'mm';
+export type UnitId = 'km' | 'm' | 'cm' | 'mm' | 'ft' | 'in';
 
-export const UNIT_IDS: readonly UnitId[] = ['km', 'm', 'cm', 'mm'] as const;
+export const UNIT_IDS: readonly UnitId[] = ['km', 'm', 'cm', 'mm', 'ft', 'in'] as const;
 
 export const UNIT_LABELS: Record<UnitId, string> = {
   km: 'Kilomètre',
   m: 'Mètre',
   cm: 'Centimètre',
   mm: 'Millimètre',
+  ft: 'Pied',
+  in: 'Pouce',
 };
 
 /** Facteur : 1 unité monde → mètres SI. */
@@ -20,6 +22,8 @@ export const UNIT_TO_METERS: Record<UnitId, number> = {
   m: 1,
   cm: 0.01,
   mm: 0.001,
+  ft: 0.3048,
+  in: 0.0254,
 };
 
 export const DEFAULT_UNIT: UnitId = 'm';
@@ -27,7 +31,21 @@ export const DEFAULT_UNIT: UnitId = 'm';
 export const DEFAULT_GRID_SPACING_METERS = 1;
 
 export function isUnitId(v: unknown): v is UnitId {
-  return v === 'km' || v === 'm' || v === 'cm' || v === 'mm';
+  return (
+    v === 'km' ||
+    v === 'm' ||
+    v === 'cm' ||
+    v === 'mm' ||
+    v === 'ft' ||
+    v === 'in'
+  );
+}
+
+/** Décimales d'affichage d'une longueur selon l'unité. */
+export function lengthDigits(unit: UnitId): number {
+  if (unit === 'mm') return 1;
+  if (unit === 'cm') return 2;
+  return 3;
 }
 
 /** Multiplicateur pour convertir une longueur de `from` vers `to`. */

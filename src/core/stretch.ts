@@ -26,6 +26,7 @@ import type {
   WallEntity,
   WallSegment,
 } from './types';
+import type { UnitId } from './units';
 import { applyWallJointsToEntities } from './walls';
 
 const EPS = 1e-12;
@@ -561,6 +562,7 @@ export function stretchDocument(
   dx: number,
   dy: number,
   dz = 0,
+  unit: UnitId = 'm',
 ): { entities: Entity[]; changed: number } {
   let changed = 0;
   const next = entities.map((e) => {
@@ -584,7 +586,7 @@ export function stretchDocument(
   });
   // Recalcul jonctions murs
   return {
-    entities: applyWallJointsToEntities(next),
+    entities: applyWallJointsToEntities(next, undefined, 'first-hit', unit),
     changed,
   };
 }
@@ -596,6 +598,7 @@ export function previewStretch(
   dx: number,
   dy: number,
   dz = 0,
+  unit: UnitId = 'm',
 ): Entity[] {
-  return stretchDocument(entities, box, dx, dy, dz).entities;
+  return stretchDocument(entities, box, dx, dy, dz, unit).entities;
 }

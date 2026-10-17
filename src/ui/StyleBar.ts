@@ -5,6 +5,7 @@
  */
 
 import type { DimPrefsManager } from '../core/dimPrefs';
+import type { DrawLayerManager } from '../core/drawLayers';
 import type { PenManager, PenPrefsFile } from '../core/penPrefs';
 import { resolvePen } from '../core/penPrefs';
 import {
@@ -13,9 +14,13 @@ import {
   type TextPrefsManager,
 } from '../core/textPrefs';
 import type { DimStyleDialog } from './DimStyleDialog';
+import type { LayersDialog } from './LayersDialog';
 
 export class StyleBar {
   private root: HTMLElement;
+  private dropEl: HTMLElement | null = null;
+  private specWrap: HTMLElement | null = null;
+  private specDropEl: HTMLElement | null = null;
 
   constructor(
     root: HTMLElement,
@@ -23,6 +28,8 @@ export class StyleBar {
     private text: TextPrefsManager,
     private dims: DimPrefsManager,
     private dimDialog: DimStyleDialog,
+    private layers: DrawLayerManager,
+    private layersDialog: LayersDialog,
   ) {
     this.root = root;
     this.root.className = 'style-bar';
@@ -40,6 +47,25 @@ export class StyleBar {
           <span class="style-line-preview" id="sb-pen-style-prev"></span>
           <span id="sb-pen-style">Plein</span>
         </button>
+      </div>
+      <div class="style-sep"></div>
+      <div class="style-group style-layer-group" title="Calque courant — clic = liste">
+        <span class="style-group-label">Calque</span>
+        <div class="layer-wrap" id="sb-layer-wrap">
+          <button type="button" class="style-chip" id="sb-layer" title="Calque courant (clic = liste)">
+            <span id="sb-layer-id">1</span>
+            <span id="sb-layer-label" class="layer-chip-label">Bedrock layer</span>
+          </button>
+          <div class="layer-dropdown hidden" id="sb-layer-drop" role="listbox"></div>
+        </div>
+        <div class="layer-wrap hidden" id="sb-spec-wrap">
+          <button type="button" class="style-chip" id="sb-spec-layer" title="Calque spécial d’insertion (clic = liste)">
+            <span id="sb-spec-id">-1</span>
+            <span id="sb-spec-label" class="layer-chip-label">Fixe (taille inchangée)</span>
+          </button>
+          <div class="layer-dropdown hidden" id="sb-spec-drop" role="listbox"></div>
+        </div>
+        <button type="button" class="style-chip" id="sb-layer-edit" title="Gérer les calques (/calques)">⋯</button>
       </div>
       <div class="style-sep"></div>
       <div class="style-group" title="Texte — /text /textbox">
@@ -118,13 +144,165 @@ export class StyleBar {
       else if (el.dataset.text === 'bg') this.cycleTextBg(-1);
     });
 
+    const layerBtn = this.root.querySelector('#sb-layer') as HTMLButtonElement;
+    this.dropEl = this.root.querySelector('#sb-layer-drop');
+    this.specWrap = this.root.querySelector('#sb-spec-wrap');
+    this.specDropEl = this.root.querySelector('#sb-spec-drop');
+    layerBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeSpecDrop();
+      this.toggleLayerDrop();
+    });
+    const specBtn = this.root.querySelector('#sb-spec-layer') as HTMLButtonElement;
+    specBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeLayerDrop();
+      this.toggleSpecDrop();
+    });
+    this.root.querySelector('#sb-layer-edit')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.closeLayerDrop();
+      this.closeSpecDrop();
+      this.layersDialog.toggle();
+    });
+    document.addEventListener('click', (e) => {
+      if (!this.root.contains(e.target as Node)) {
+        this.closeLayerDrop();
+        this.closeSpecDrop();
+      }
+    });
+
     this.pen.onChange((p) => this.renderPen(p));
     this.text.onChange((p) => this.renderText(p));
     this.dims.onChange(() => this.renderDim());
+    this.layers.onChange(() => this.renderLayer());
 
     this.renderPen(this.pen.file);
     this.renderText(this.text.file);
     this.renderDim();
+    this.renderLayer();
+  }
+
+  private toggleLayerDrop(): void {
+    if (!this.dropEl) return;
+    if (this.dropEl.classList.contains('hidden')) this.openLayerDrop();
+    else this.closeLayerDrop();
+  }
+
+  private openLayerDrop(): void {
+    if (!this.dropEl) return;
+    this.dropEl.classList.remove('hidden');
+    this.fillLayerDrop();
+    const cur = this.dropEl.querySelector<HTMLElement>(
+      `[data-layer="${this.layers.current}"]`,
+    );
+    cur?.scrollIntoView({ block: 'nearest' });
+  }
+
+  private closeLayerDrop(): void {
+    this.dropEl?.classList.add('hidden');
+  }
+
+  private fillLayerDrop(): void {
+    if (!this.dropEl) return;
+    this.dropEl.innerHTML = '';
+    const rows = this.layers.listStandard();
+    const cur = this.layers.standardLayer;
+    for (const row of rows) {
+      this.dropEl.appendChild(
+        this.makeDropItem(row.id, row.label, row.id === cur, (id) => {
+          this.layers.setCurrent(id);
+          this.closeLayerDrop();
+        }),
+      );
+    }
+  }
+
+  private toggleSpecDrop(): void {
+    if (!this.specDropEl) return;
+    if (this.specDropEl.classList.contains('hidden')) this.openSpecDrop();
+    else this.closeSpecDrop();
+  }
+
+  private openSpecDrop(): void {
+    if (!this.specDropEl) return;
+    this.specDropEl.classList.remove('hidden');
+    this.fillSpecDrop();
+    const cur = this.specDropEl.querySelector<HTMLElement>(
+      `[data-layer="${this.layers.insertLayer}"]`,
+    );
+    cur?.scrollIntoView({ block: 'nearest' });
+  }
+
+  private closeSpecDrop(): void {
+    this.specDropEl?.classList.add('hidden');
+  }
+
+  private fillSpecDrop(): void {
+    if (!this.specDropEl) return;
+    this.specDropEl.innerHTML = '';
+    const rows = this.layers.listSpecial();
+    const cur = this.layers.insertLayer;
+    for (const row of rows) {
+      this.specDropEl.appendChild(
+        this.makeDropItem(row.id, row.label, row.id === cur, (id) => {
+          this.layers.setInsertLayer(id);
+          this.closeSpecDrop();
+        }),
+      );
+    }
+  }
+
+  private makeDropItem(
+    id: number,
+    label: string,
+    current: boolean,
+    onPick: (id: number) => void,
+  ): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'layer-drop-item' + (current ? ' current' : '');
+    b.dataset.layer = String(id);
+    b.setAttribute('role', 'option');
+    const idEl = document.createElement('span');
+    idEl.className = 'layer-drop-id';
+    idEl.textContent = String(id);
+    const labEl = document.createElement('span');
+    labEl.className = 'layer-drop-label';
+    labEl.textContent = label;
+    b.appendChild(idEl);
+    b.appendChild(labEl);
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onPick(id);
+    });
+    return b;
+  }
+
+  private renderLayer(): void {
+    const std = this.layers.standardLayer;
+    (this.root.querySelector('#sb-layer-id') as HTMLElement).textContent =
+      String(std);
+    (this.root.querySelector('#sb-layer-label') as HTMLElement).textContent =
+      this.layers.label(std);
+    if (this.dropEl && !this.dropEl.classList.contains('hidden')) {
+      this.fillLayerDrop();
+    }
+
+    const show = this.layers.showSpecialId;
+    this.specWrap?.classList.toggle('hidden', !show);
+    if (show) {
+      const sid = this.layers.insertLayer;
+      (this.root.querySelector('#sb-spec-id') as HTMLElement).textContent =
+        String(sid);
+      (this.root.querySelector('#sb-spec-label') as HTMLElement).textContent =
+        this.layers.label(sid);
+      if (this.specDropEl && !this.specDropEl.classList.contains('hidden')) {
+        this.fillSpecDrop();
+      }
+    } else {
+      this.closeSpecDrop();
+    }
   }
 
   private cycleTextColor(dir: number): void {

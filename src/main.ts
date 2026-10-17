@@ -2,6 +2,10 @@ import { AppPrefsManager } from './core/appPrefs';
 import { DesignationManager } from './core/designation';
 import { DimPrefsManager } from './core/dimPrefs';
 import { CadDocument } from './core/document';
+import { runSave } from './commands/registry';
+import { DrawLayerManager, isInsertionsTab } from './core/drawLayers';
+import { fsRead } from './core/fsClient';
+import { createEmptyDocument, parseGkd } from './core/gkd';
 import { onHatchCacheChange } from './core/hatchCache';
 import { HatchPrefsManager } from './core/hatchPrefs';
 import { objectDefCache } from './core/objectCache';
@@ -17,6 +21,8 @@ import { WallLibraryManager } from './core/wallPrefs';
 import { CommandBar } from './ui/CommandBar';
 import { DimStyleDialog } from './ui/DimStyleDialog';
 import { HatchLibraryDialog } from './ui/HatchLibraryDialog';
+import { InsertLayerRail } from './ui/InsertLayerRail';
+import { LayersDialog } from './ui/LayersDialog';
 import { ObjectLibraryDialog } from './ui/ObjectLibraryDialog';
 import { SettingsDialog } from './ui/SettingsDialog';
 import { StyleBar } from './ui/StyleBar';
@@ -78,6 +84,9 @@ const viewport = new Viewport(canvas, {
 viewport.setAppPrefs(app);
 
 const tools = new DrawingTools(doc, viewport, pen);
+window.addEventListener('beforeunload', () => {
+  tools.dispose();
+});
 tools.setWallLibrary(walls);
 tools.setHatchPrefs(hatch);
 tools.setSelection(selection);
@@ -90,16 +99,38 @@ const dimStyles = new DimStyleDialog(dimPrefs, pen);
 const wallLib = new WallLibraryDialog(walls, pen);
 const objLib = new ObjectLibraryDialog();
 const hatchLib = new HatchLibraryDialog(hatch);
+const layers = new DrawLayerManager(doc);
+const layersDialog = new LayersDialog(layers);
 
-new StyleBar(styleBarRoot, pen, textPrefs, dimPrefs, dimStyles);
+new StyleBar(styleBarRoot, pen, textPrefs, dimPrefs, dimStyles, layers, layersDialog);
+
+const viewportWrap = el<HTMLElement>('viewport-wrap');
+const viewportStage = el<HTMLElement>('viewport-stage');
+const insertRail = new InsertLayerRail(el<HTMLElement>('insert-layer-rail'), layers);
+
+function applyInsertRailSide(): void {
+  viewportWrap.classList.toggle('rail-right', app.insertLayerRailSide === 'right');
+  viewport.resizeNow();
+}
+applyInsertRailSide();
+app.onChange(() => applyInsertRailSide());
 
 // Unité document = prefs app (sans marquer dirty au démarrage)
 doc.setUnits(app.units, { dirty: false });
 
 /** Édition d’un fichier library en cours. */
-let libraryEdit: { tab: string; name: string } | null = null;
+let libraryEdit: {
+  tab: string;
+  name: string;
+  insertion?: boolean;
+  returnPath?: string | null;
+} | null = null;
 /** Document principal mis de côté pendant l’édition library. */
-let stashedMain: { doc: GkdDocument; filename: string } | null = null;
+let stashedMain: {
+  doc: GkdDocument;
+  filename: string;
+  filePath: string | null;
+} | null = null;
 
 walls.onChange(() => {
   doc.setWallLibrary(walls.toDocumentLibrary());
@@ -150,27 +181,130 @@ function syncScene(): void {
   }
 }
 
-doc.onChange(syncScene);
+doc.onChange(() => {
+  layers.notifyDocChanged();
+  syncScene();
+});
 syncScene();
 
-function openLibraryEdit(tab: string, name: string, libDoc: GkdDocument): void {
-  // Ne pas empiler si déjà en édition d’un autre
+function setInsertCanvasUi(on: boolean): void {
+  viewportStage.classList.toggle('insert-edit', on);
+  if (on) {
+    applyInsertRailSide();
+    insertRail.show();
+  } else {
+    insertRail.hide();
+  }
+  viewport.resizeNow();
+}
+
+async function ensureMainDrawingSaved(): Promise<boolean> {
+  if (libraryEdit) return true;
+  return runSave(cmdBar.context, { forceDialog: !doc.filePath });
+}
+
+async function enterInsertCanvas(
+  tab: string,
+  name: string,
+  libDoc: GkdDocument,
+): Promise<void> {
+  const saved = await ensureMainDrawingSaved();
+  if (!saved) {
+    cmdBar.setFeedback('Création / modification annulée (dessin non enregistré).', 'warn');
+    return;
+  }
   if (!libraryEdit) {
     stashedMain = {
       doc: doc.snapshot(viewport.getCameraState()),
       filename: doc.filename,
+      filePath: doc.filePath,
+    };
+  }
+  libraryEdit = {
+    tab,
+    name,
+    insertion: true,
+    returnPath: doc.filePath,
+  };
+  selection.clear();
+  designation.clear();
+  doc.load(libDoc, `library/${tab}/${name || 'nouveau'}.gkd`);
+  layers.setInsertMode(true);
+  layers.notifyDocChanged();
+  setInsertCanvasUi(true);
+  viewport.applyCameraState(libDoc.camera);
+  setDocTitle(`✎ library/${tab}/${name || '(nouveau)'}.gkd`);
+  cmdBar.setFeedback(
+    `Canvas d’insertion library/${tab}/ — calques spéciaux à ${app.insertLayerRailSide === 'right' ? 'droite' : 'gauche'}. /save enregistre l’objet (ancre −9 obligatoire) et rouvre le dessin.`,
+    'info',
+  );
+}
+
+function openLibraryEdit(tab: string, name: string, libDoc: GkdDocument): void {
+  if (isInsertionsTab(tab)) {
+    void enterInsertCanvas(tab, name, libDoc);
+    return;
+  }
+  if (!libraryEdit) {
+    stashedMain = {
+      doc: doc.snapshot(viewport.getCameraState()),
+      filename: doc.filename,
+      filePath: doc.filePath,
     };
   }
   libraryEdit = { tab, name };
   selection.clear();
   designation.clear();
   doc.load(libDoc, `library/${tab}/${name}.gkd`);
+  layers.setInsertMode(false);
+  layers.notifyDocChanged();
+  setInsertCanvasUi(false);
   viewport.applyCameraState(libDoc.camera);
   setDocTitle(`✎ library/${tab}/${name}.gkd`);
   cmdBar.setFeedback(
     `Édition library/${tab}/${name}.gkd — /save pour enregistrer · /closelib pour revenir au dessin`,
     'info',
   );
+}
+
+async function restoreMainDrawing(): Promise<void> {
+  const returnPath = libraryEdit?.returnPath ?? stashedMain?.filePath ?? null;
+  libraryEdit = null;
+  selection.clear();
+  designation.clear();
+  layers.setInsertMode(false);
+  setInsertCanvasUi(false);
+  if (returnPath) {
+    try {
+      const { content, name } = await fsRead(returnPath);
+      const loaded = parseGkd(content);
+      doc.load(loaded, name, returnPath);
+      viewport.applyCameraState(loaded.camera);
+      walls.loadFromDocument(loaded.wallLibrary ?? []);
+      setDocTitle(name);
+      stashedMain = null;
+      layers.notifyDocChanged();
+      cmdBar.setFeedback('Retour au dessin principal.', 'ok');
+      return;
+    } catch (e) {
+      cmdBar.setFeedback(
+        `Impossible de rouvrir ${returnPath} : ${e instanceof Error ? e.message : String(e)}`,
+        'warn',
+      );
+    }
+  }
+  if (stashedMain) {
+    doc.load(stashedMain.doc, stashedMain.filename, stashedMain.filePath);
+    viewport.applyCameraState(stashedMain.doc.camera);
+    walls.loadFromDocument(stashedMain.doc.wallLibrary ?? []);
+    setDocTitle(stashedMain.filename);
+    stashedMain = null;
+  } else {
+    doc.reset();
+    setDocTitle(doc.filename);
+  }
+  layers.notifyDocChanged();
+  cmdBar.setFeedback('Retour au dessin principal.', 'ok');
 }
 
 function closeLibraryEdit(): void {
@@ -184,20 +318,7 @@ function closeLibraryEdit(): void {
     );
     if (!ok) return;
   }
-  libraryEdit = null;
-  selection.clear();
-  designation.clear();
-  if (stashedMain) {
-    doc.load(stashedMain.doc, stashedMain.filename);
-    viewport.applyCameraState(stashedMain.doc.camera);
-    walls.loadFromDocument(stashedMain.doc.wallLibrary ?? []);
-    setDocTitle(stashedMain.filename);
-    stashedMain = null;
-  } else {
-    doc.reset();
-    setDocTitle(doc.filename);
-  }
-  cmdBar.setFeedback('Retour au dessin principal.', 'ok');
+  void restoreMainDrawing();
 }
 
 objLib.setPlaceHandler((tab, name, _d) => {
@@ -206,6 +327,15 @@ objLib.setPlaceHandler((tab, name, _d) => {
 
 objLib.setEditHandler((tab, name, d) => {
   openLibraryEdit(tab, name, d);
+});
+
+objLib.setCreateInsertHandler((tab) => {
+  const empty = createEmptyDocument('insertion');
+  void enterInsertCanvas(tab, '', empty);
+});
+
+objLib.setInsertBrowseHandler((open) => {
+  layers.setLibraryInsertOpen(open);
 });
 
 hatchLib.setEditHandler((name, d) => {
@@ -231,6 +361,8 @@ const cmdBar = new CommandBar(
   textPrefs,
   dimPrefs,
   dimStyles,
+  layers,
+  layersDialog,
   setDocTitle,
 );
 
@@ -250,6 +382,16 @@ settings.setUnitsChangeHandler((prev, next) => {
 // Hooks édition library dans le contexte commandes
 cmdBar.context.getLibraryEdit = () => libraryEdit;
 cmdBar.context.closeLibraryEdit = closeLibraryEdit;
+cmdBar.context.finishInsertSession = restoreMainDrawing;
+cmdBar.context.onMissingInsertAnchor = () => {
+  layers.setInsertMode(true);
+  layers.forceAnchorLayer();
+  setInsertCanvasUi(true);
+  cmdBar.setFeedback(
+    'Calque −9 (point d’ancrage) activé — placez un point, puis /save.',
+    'warn',
+  );
+};
 
 function renderGridChip(
   btn: HTMLButtonElement,

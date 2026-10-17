@@ -98,7 +98,7 @@ Persistance : JSON dans `localStorage` (clé `grokcad.pen`), schéma dans `src/c
 | `/snap` `[px\|on\|off]` | Accroche clic droit (rayon px) |
 | `/param` | Fenêtre paramètres (snap + styles) |
 | `/couleur` `/epaisseur` `/style` | Stylo |
-| `/pan dx dy` | Décalage vue en mètres |
+| `/pan dx dy` | Décalage vue en unités du document |
 | `/zoom f` | Zoom par facteur |
 | `/center` (`/fit` `/ze`) | Cadre tout le dessin dans le canvas (emprise 3D, vue courante) |
 | `/axes [x y z \| . \| @]` | 3 axes d’aide XYZ |

@@ -1,4 +1,3 @@
-import { applyCut, findNearestCuttable } from './cut';
 import {
   applyTrim,
   findNearestTrimCandidate,
@@ -53,9 +52,32 @@ import { objectDefCache } from './objectCache';
 import {
   createObjectInstance,
   expandObjectEntities,
-  objectInstanceStrokes,
+  previewInsertStrokes,
   previewObjectStrokes,
 } from './objectInstance';
+import {
+  ANCHOR_LAYER,
+  entityDrawLayer,
+  hasAnchorPoint,
+  hasInsertLayers,
+} from './drawLayers';
+import {
+  findNearestInsertHost,
+  frameFromHit,
+  rotationFromAxisX,
+  type InsertHostHit,
+} from './insertHost';
+import {
+  anchorPreviewCircle,
+  defaultInsertPlacement,
+} from './insertTransform';
+import {
+  composeInsertFrame,
+  formatInsertLength,
+  measureOpening,
+  openingFromFrame,
+} from './insertOpening';
+import type { InsertPlacement } from './types';
 import {
   buildObjectDocument,
   saveExtractDialog,
@@ -98,17 +120,11 @@ import {
   applyJoinWallsToEntities,
   applyCornerWallsToEntities,
   findNearestWall,
-  WALL_JOIN_TOL,
   wallEntityStrokes,
   wallSegFromArcEntity,
   wallSegLineFrom,
   type JonctionStrategyId,
 } from './walls';
-import {
-  helperParallelX,
-  helperParallelY,
-  helperParallelZ,
-} from './helpers';
 import {
   appendSegment,
   arcSegFromArc,
@@ -120,15 +136,26 @@ import {
   polylineEnd,
   polylineEndTangent,
   polylineStart,
-  polylineStrokes,
 } from './polyline';
 import { dist } from './geometry';
-import { formatLength } from './units';
+import { formatLength, lengthDigits } from './units';
+import { metersToDoc, TOL_M } from './tolerances';
 import { showConfirm } from '../ui/ConfirmDialog';
+import { showTextInputDialog } from '../ui/TextInputDialog';
 import type { Viewport } from '../viewport/Viewport';
-
-/** Tolérance de fermeture polyligne (dernier ≈ premier), en mètres. */
-const POLY_CLOSE_TOL = 0.001;
+import { constrainAxis45, projectOnCircle } from './tools/constraints';
+import { ModifierTracker, type ModifierKey } from './tools/modifiers';
+import { enterChainedTool, type ChainCursor } from './tools/shared/PolyBuilder';
+import { dispatchPoint, type ToolDispatch } from './tools/ToolManager';
+import {
+  appendEntityPreview,
+  type PreviewStroke,
+} from './tools/preview/entityPreview';
+import { cutAtPoint } from './tools/simple/cut';
+import { deletePickAtPoint } from './tools/simple/deletePick';
+import { distStep } from './tools/simple/dist';
+import { placeHelperOnAxis } from './tools/simple/helperAxis';
+import { placePointEntity } from './tools/simple/point';
 
 export type HelperAxis = 'x' | 'y' | 'z';
 
@@ -164,6 +191,8 @@ export type ToolKind =
   | 'obj'
   | 'extract'
   | 'placeobj'
+  | 'insertin'
+  | 'anchor'
   | 'paral'
   | 'dist'
   | 'rect'
@@ -200,9 +229,7 @@ export class DrawingTools {
   private contTangent: Vec3 | null = null;
   /** Mur : bascule côté offsets (touche ALT). */
   private wallFlip = false;
-  private altHandler: ((e: KeyboardEvent) => void) | null = null;
   private altDown = false;
-  private altTrack: ((e: KeyboardEvent) => void) | null = null;
   /** Shift : verrouille H / 45° / V pour /ligne et /ml. */
   private shiftDown = false;
   private feedback: ToolFeedback = () => undefined;
@@ -229,6 +256,13 @@ export class DrawingTools {
   /** Placement objet library en cours. */
   private placeTab: string | null = null;
   private placeName: string | null = null;
+  /** /iw — insertion dans un hôte. */
+  private insertHit: InsertHostHit | null = null;
+  private insertFlipAlt = false;
+  private insertFlipCtrl = false;
+  /** Distance ancre → bord, en mètres (pas le multiplicateur interne). */
+  private insertLength = 1;
+  private insertXSign: 1 | -1 = 1;
   /** /paral */
   private paralDeltas: ParalDelta[] | null = null;
   /** /paral 1.2 — décalage perpendiculaire fixe (unités doc). */
@@ -272,51 +306,133 @@ export class DrawingTools {
   /** /corner — 1er mur + clic (côté à garder). */
   private cornerFirst: { wallId: string; click: Vec3 } | null = null;
 
+  /** Shift / Alt / Ctrl : un seul jeu d'écouteurs, retiré par dispose(). */
+  private readonly modifiers = new ModifierTracker((key, down, e) => {
+    this.onModifier(key, down, e);
+  });
+
   constructor(
     private doc: CadDocument,
     private viewport: Viewport,
     private pen: PenManager,
   ) {
-    // État Shift global (même si enfoncé avant le démarrage de l’outil)
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'Shift') {
-        this.shiftDown = true;
-        if (
-          this.kind === 'line' ||
-          this.kind === 'wallline' ||
-          this.kind === 'pline' ||
-          this.kind === 'pmur' ||
-          this.kind === 'rect' ||
-          this.kind === 'cote' ||
-          this.kind === 'move' ||
-          this.kind === 'm1' ||
-          this.kind === 'copy'
-        ) {
-          this.updatePreview();
-        }
-      }
-    });
-    window.addEventListener('keyup', (e) => {
-      if (e.key === 'Shift') {
-        this.shiftDown = false;
-        if (
-          this.kind === 'line' ||
-          this.kind === 'wallline' ||
-          this.kind === 'pline' ||
-          this.kind === 'pmur' ||
-          this.kind === 'rect' ||
-          this.kind === 'cote' ||
-          this.kind === 'move' ||
-          this.kind === 'm1' ||
-          this.kind === 'copy'
-        ) {
-          this.updatePreview();
-        }
-      }
-    });
-    window.addEventListener('blur', () => {
+    // Les méthodes privées passent par dispatchPoint (cast) : une lecture
+    // explicite évite qu'elles soient prises pour du code mort.
+    this.keepDispatchTargets();
+  }
+
+  private keepDispatchTargets(): void {
+    void this.onPoint;
+    void this.onCutPoint;
+    void this.onTrimPoint;
+    void this.onExtendPoint;
+    void this.onFillPoint;
+    void this.onDelHatchPoint;
+    void this.onDeletePickPoint;
+    void this.onHelperAxisPoint;
+    void this.onObjOrigin;
+  }
+
+  /**
+   * Retire les écouteurs clavier et le mode pick.
+   * À appeler quand la page se ferme.
+   */
+  dispose(): void {
+    this.modifiers.dispose();
+    this.viewport.setPickHandler(null);
+  }
+
+  private static readonly SHIFT_PREVIEW = new Set<string>([
+    'line',
+    'wallline',
+    'pline',
+    'pmur',
+    'rect',
+    'cote',
+    'move',
+    'm1',
+    'copy',
+  ]);
+
+  private onModifier(key: ModifierKey, down: boolean, e?: KeyboardEvent): void {
+    if (key === 'blur') {
       this.shiftDown = false;
-    });
+      this.altDown = false;
+      if (this.kind === 'insertin') {
+        this.insertFlipAlt = false;
+        this.insertFlipCtrl = false;
+      }
+      if (
+        (this.kind && DrawingTools.SHIFT_PREVIEW.has(this.kind)) ||
+        this.kind === 'select' ||
+        this.kind === 'insertin'
+      ) {
+        this.updatePreview();
+      }
+      return;
+    }
+    if (key === 'shift') {
+      this.shiftDown = down;
+      if (this.kind && DrawingTools.SHIFT_PREVIEW.has(this.kind)) {
+        this.updatePreview();
+      }
+      return;
+    }
+    if (key === 'alt') {
+      if (
+        down &&
+        (this.kind === 'wallline' ||
+          this.kind === 'wallarc' ||
+          this.isPolyWallTool())
+      ) {
+        e?.preventDefault();
+        this.wallFlip = !this.wallFlip;
+        const pw = this.getActivePolyWall();
+        if (pw) {
+          this.doc.replaceEntity(pw.id, [{ ...pw, flip: this.wallFlip }]);
+        }
+        this.feedback(
+          `Mur côté ${this.wallFlip ? 'inversé (flip)' : 'normal'} — [ALT] pour basculer.`,
+          'info',
+        );
+        this.updatePreview();
+        return;
+      }
+      if (this.kind === 'select') {
+        this.altDown = down;
+        this.updatePreview();
+        return;
+      }
+      if (this.kind === 'insertin') {
+        e?.preventDefault();
+        this.altDown = down;
+        this.insertFlipAlt = down;
+        this.updatePreview();
+      }
+      return;
+    }
+    if (key === 'ctrl' && this.kind === 'insertin') {
+      e?.preventDefault();
+      this.insertFlipCtrl = down;
+      this.updatePreview();
+    }
+  }
+
+  /** Un seul chemin de clic : pick canvas et ligne de commande. */
+  private armPick(opts?: { rightClickAsPick?: boolean }): void {
+    this.viewport.setPickHandler((pt, src) => {
+      dispatchPoint(this as unknown as ToolDispatch, pt, src);
+    }, opts);
+  }
+
+  private fmtLen(v: number): string {
+    const u = this.doc.units;
+    return formatLength(v, u, lengthDigits(u));
+  }
+
+  /** 1 mm réel, dans l'unité du document. */
+  private polyCloseTol(): number {
+    return metersToDoc(TOL_M.polyClose, this.doc.units);
   }
 
   private isPolyTool(k: ToolKind = this.kind): k is PolyToolKind {
@@ -370,7 +486,7 @@ export class DrawingTools {
   startRect(): void {
     this.resetState();
     this.kind = 'rect';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'RECT — 1er coin…  [Shift] = carré  ·  Échap = annuler',
       'info',
@@ -401,7 +517,7 @@ export class DrawingTools {
     this.kind = boxed ? 'textbox' : 'text';
     this.pendingText = content;
     this.textBoxed = boxed;
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       `${boxed ? 'TEXTBOX' : 'TEXT'} « ${shortText(content)} » — point de départ…  ·  Échap = annuler`,
       'info',
@@ -439,7 +555,7 @@ export class DrawingTools {
     this.coteDefPoints = [];
     this.coteDir = null;
     this.cotePlacedCount = 0;
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       `COTE « ${this.dimPrefs.current.name} » — 1 segment = 1 entité + texte. Passage de la ligne…  ·  Échap = fin (segments déjà posés conservés)`,
       'info',
@@ -467,7 +583,7 @@ export class DrawingTools {
   startLine(): void {
     this.resetState();
     this.kind = 'line';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'LIGNE — départ…  [Shift] = H / 45° / V  ·  Échap = fin',
       'info',
@@ -481,7 +597,7 @@ export class DrawingTools {
   startDist(): void {
     this.resetState();
     this.kind = 'dist';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     const u = this.viewport.getUnits();
     this.feedback(
       `DIST — 1er point…  (unité : ${u})  ·  Échap = fin`,
@@ -515,35 +631,46 @@ export class DrawingTools {
 
   private enterPolyTool(mode: PolyToolKind): void {
     const switching = this.isPolyTool();
-    // Conserver la pointe si on bascule entre pline/parc/parct
-    let tip: Vec3 | null = null;
     let polyId = this.polyId;
-    if (switching) {
-      tip = this.currentPolyTip();
-      // Abandonne le point de passage en cours (arc incomplet)
-      this.p1 = null;
-      this.contPoint = null;
-      this.contTangent = null;
-    } else {
-      this.resetState();
-      polyId = null;
-    }
-
-    this.kind = mode;
-    this.polyId = polyId;
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
-
+    const cursor: ChainCursor = {
+      p0: this.p0,
+      p1: this.p1,
+      step: this.step,
+      contPoint: this.contPoint,
+      contTangent: this.contTangent,
+    };
+    const tip = enterChainedTool({
+      switching,
+      reset: () => {
+        this.resetState();
+        polyId = null;
+      },
+      currentTip: () => this.currentPolyTip(),
+      clearPending: (c) => {
+        c.p1 = null;
+        c.contPoint = null;
+        c.contTangent = null;
+        this.p1 = null;
+        this.contPoint = null;
+        this.contTangent = null;
+      },
+      assignIdentity: () => {
+        this.kind = mode;
+        this.polyId = polyId;
+      },
+      armPick: () => this.armPick(),
+      cursor,
+    });
     if (tip) {
-      this.p0 = tip;
       this.setupPolyAfterTip(mode, tip);
-    } else {
-      this.p0 = null;
-      this.p1 = null;
-      this.step = 0;
-      this.contPoint = null;
-      this.contTangent = null;
-      this.feedback(this.polyStartMsg(mode), 'info');
+      return;
     }
+    this.p0 = null;
+    this.p1 = null;
+    this.step = 0;
+    this.contPoint = null;
+    this.contTangent = null;
+    this.feedback(this.polyStartMsg(mode), 'info');
   }
 
   private polyStartMsg(mode: PolyToolKind): string {
@@ -645,40 +772,50 @@ export class DrawingTools {
     }
 
     const switching = this.isPolyWallTool();
-    let tip: Vec3 | null = null;
     let pwallId = this.pwallId;
     let flip = this.wallFlip;
-
-    if (switching) {
-      tip = this.currentPolyWallTip();
-      flip = this.wallFlip;
-      this.p1 = null;
-      this.contPoint = null;
-      this.contTangent = null;
-    } else {
-      // Quitte polyligne ou autre outil
-      this.resetState();
-      pwallId = null;
-      flip = false;
-    }
-
-    this.kind = mode;
-    this.pwallId = pwallId;
-    this.wallFlip = flip;
-    this.bindAltFlip();
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
-
+    const cursor: ChainCursor = {
+      p0: this.p0,
+      p1: this.p1,
+      step: this.step,
+      contPoint: this.contPoint,
+      contTangent: this.contTangent,
+    };
+    const tip = enterChainedTool({
+      switching,
+      reset: () => {
+        this.resetState();
+        pwallId = null;
+        flip = false;
+      },
+      currentTip: () => this.currentPolyWallTip(),
+      clearPending: (c) => {
+        c.p1 = null;
+        c.contPoint = null;
+        c.contTangent = null;
+        this.p1 = null;
+        this.contPoint = null;
+        this.contTangent = null;
+      },
+      assignIdentity: () => {
+        this.kind = mode;
+        this.pwallId = pwallId;
+        this.wallFlip = flip;
+        this.bindAltFlip();
+      },
+      armPick: () => this.armPick(),
+      cursor,
+    });
     if (tip) {
-      this.p0 = tip;
       this.setupPolyWallAfterTip(mode, tip, style.name);
-    } else {
-      this.p0 = null;
-      this.p1 = null;
-      this.step = 0;
-      this.contPoint = null;
-      this.contTangent = null;
-      this.feedback(this.polyWallStartMsg(mode, style.name), 'info');
+      return;
     }
+    this.p0 = null;
+    this.p1 = null;
+    this.step = 0;
+    this.contPoint = null;
+    this.contTangent = null;
+    this.feedback(this.polyWallStartMsg(mode, style.name), 'info');
   }
 
   private polyWallStartMsg(mode: PolyWallToolKind, styleName: string): string {
@@ -759,7 +896,7 @@ export class DrawingTools {
   startArcc(): void {
     this.resetState();
     this.kind = 'arcc';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'ARCC — centre (clic, . , @ ou x y [z]). Puis rayon. Ensuite Échap = cercle, ou 2 clics = arc.',
       'info',
@@ -770,7 +907,7 @@ export class DrawingTools {
   startArc(): void {
     this.resetState();
     this.kind = 'arc';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'ARC — point de départ. Puis point de passage, puis fin. Échap = annuler.',
       'info',
@@ -783,7 +920,7 @@ export class DrawingTools {
   startArcCont(): void {
     this.resetState();
     this.kind = 'arccont';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'ARCCONT — 1er arc : départ → passage → fin. Puis point suivant (continuité tangente). Échap = terminer.',
       'info',
@@ -794,7 +931,7 @@ export class DrawingTools {
   startCircle(): void {
     this.resetState();
     this.kind = 'circle';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'CERCLE — centre (clic, . , @ ou x y [z]). Puis un point sur le rayon. Échap = annuler.',
       'info',
@@ -808,7 +945,7 @@ export class DrawingTools {
   startPoint(): void {
     this.resetState();
     this.kind = 'point';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     const w = this.pen.resolved.lineWidth;
     this.feedback(
       `POINT — clic pour placer (${this.pen.resolved.colorLabel}, ${w}×${w} px écran). Clics enchaînés · Échap = fin`,
@@ -831,13 +968,50 @@ export class DrawingTools {
   }
 
   /**
+   * /ancrage — un clic (gauche ou droit) pose le point d’ancrage (calque −9)
+   * et remplace l’éventuel ancre précédente. Un seul point.
+   */
+  startAnchor(): void {
+    this.resetState();
+    this.kind = 'anchor';
+    this.armPick();
+    this.feedback(
+      'ANCRAGE (−9) — clic gauche ou droit pour placer le point d’ancrage. Échap = annuler',
+      'info',
+    );
+  }
+
+  /**
+   * Pose (ou remplace) le unique point d’ancrage couche −9.
+   * @param endTool si true, termine l’outil interactif après le clic.
+   */
+  placeAnchor(pt: Vec3, endTool = false): void {
+    const old = this.doc.entities
+      .filter((e) => e.kind === 'point' && entityDrawLayer(e) === ANCHOR_LAYER)
+      .map((e) => e.id);
+    if (old.length) this.doc.removeEntities(old);
+    const r = this.pen.resolved;
+    const ent = createPointEntity(pt, {
+      color: '#ffcc66',
+      lineWidth: Math.max(3, r.lineWidth),
+      drawLayer: ANCHOR_LAYER,
+    });
+    this.doc.addEntity(ent);
+    this.feedback(
+      `Point d’ancrage (−9) @ (${fmt(pt)})${old.length ? ' (précédent remplacé)' : ''}.`,
+      'ok',
+    );
+    if (endTool) this.resetState();
+  }
+
+  /**
    * /cut — coupe l'élément le plus proche du clic (rayon snap en px).
    * Clics enchaînés jusqu'à Échap. Rien si hors rayon.
    */
   startCut(): void {
     this.resetState();
     this.kind = 'cut';
-    this.viewport.setPickHandler((pt) => this.onCutPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `CUT — clic près d’une ligne / arc / cercle (≤ ${px} px). Échap = terminer.`,
@@ -855,7 +1029,7 @@ export class DrawingTools {
     this.trimTarget = null;
     this.trimCut = null;
     this.step = 0;
-    this.viewport.setPickHandler((pt) => this.onTrimPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `TRIM — 1) objet à couper (ligne / arc / mur / polyligne ouverte, ≤ ${px} px)… Échap = fin`,
@@ -872,7 +1046,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'extend';
     this.extendSource = null;
-    this.viewport.setPickHandler((pt) => this.onExtendPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `EXTEND — 1) objet à allonger (ligne / arc / bout de polyligne ouverte, ≤ ${px} px)… Échap = fin`,
@@ -886,7 +1060,7 @@ export class DrawingTools {
   startFill(): void {
     this.resetState();
     this.kind = 'fill';
-    this.viewport.setPickHandler((pt) => void this.onFillPoint(pt));
+    this.armPick();
     const name = this.hatch?.currentName ?? '?';
     const px = this.viewport.snapRadiusPx();
     this.feedback(
@@ -901,7 +1075,7 @@ export class DrawingTools {
   startDelHatch(): void {
     this.resetState();
     this.kind = 'delh';
-    this.viewport.setPickHandler((pt) => this.onDelHatchPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `DELH — cliquez une polyligne pour enlever le hachurage (≤ ${px} px) · Échap = fin`,
@@ -949,7 +1123,7 @@ export class DrawingTools {
   startDeletePick(): void {
     this.resetState();
     this.kind = 'deletepick';
-    this.viewport.setPickHandler((pt) => this.onDeletePickPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `DELETE — désignez l’élément à effacer (≤ ${px} px). Clics enchaînés · Échap = terminer.`,
@@ -965,7 +1139,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'helperaxis';
     this.helperAxis = axis;
-    this.viewport.setPickHandler((pt) => this.onHelperAxisPoint(pt));
+    this.armPick();
     const label =
       axis === 'x'
         ? '// X (Y et Z du clic)'
@@ -980,26 +1154,13 @@ export class DrawingTools {
 
   /** Place une aide // axe au point donné (usage CLI direct aussi). */
   placeHelperAxis(axis: HelperAxis, pt: Vec3): void {
-    const n = (v: number) => (Math.abs(v) < 1e-9 ? 0 : v).toFixed(3);
-    if (axis === 'x') {
-      this.doc.addHelper(helperParallelX(pt[1], pt[2]));
-      this.feedback(
-        `Aide // X  à Y=${n(pt[1])} Z=${n(pt[2])}  (X ignoré)`,
-        'ok',
-      );
-    } else if (axis === 'y') {
-      this.doc.addHelper(helperParallelY(pt[0], pt[2]));
-      this.feedback(
-        `Aide // Y  à X=${n(pt[0])} Z=${n(pt[2])}  (Y ignoré)`,
-        'ok',
-      );
-    } else {
-      this.doc.addHelper(helperParallelZ(pt[0], pt[1]));
-      this.feedback(
-        `Aide // Z  en X=${n(pt[0])} Y=${n(pt[1])}  (Z ignoré)`,
-        'ok',
-      );
-    }
+    placeHelperOnAxis({
+      axis,
+      pt,
+      add: (h) => this.doc.addHelper(h),
+      feedback: (m, l) => this.feedback(m, l),
+      len: (n) => this.fmtLen(n),
+    });
   }
 
   /**
@@ -1019,7 +1180,7 @@ export class DrawingTools {
     this.kind = 'wallline';
     this.wallFlip = false;
     this.bindAltFlip();
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       `MUR LIGNE — « ${style.name} » (${style.lines.length} trait(s)). Départ…  [Shift]=H/45°/V  [ALT]=côté  ·  Échap = fin`,
       'info',
@@ -1043,7 +1204,7 @@ export class DrawingTools {
     this.kind = 'wallarc';
     this.wallFlip = false;
     this.bindAltFlip();
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       `MUR ARC — « ${style.name} ». Départ → passage → fin.  [ALT] = bascule côté · Échap = fin`,
       'info',
@@ -1055,7 +1216,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'select';
     this.bindAltTrack();
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'SELECT — 1er coin du cadre…  [ALT] maintenu = désélectionner · Échap = annuler',
       'info',
@@ -1072,7 +1233,7 @@ export class DrawingTools {
   startCopy(): void {
     this.resetState();
     this.kind = 'copy';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
 
     if (this.selection && this.selection.size > 0) {
       this.copyMode = 'selection';
@@ -1102,7 +1263,7 @@ export class DrawingTools {
     }
     this.resetState();
     this.kind = 'move';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       `MOVE — ${this.selection.size} élém. Point de base… puis destination  [Shift]=H/45°/V  ·  Échap = annuler`,
       'info',
@@ -1117,7 +1278,7 @@ export class DrawingTools {
   startMoveOne(): void {
     this.resetState();
     this.kind = 'm1';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `M1 — désignez un objet (≤ ${px} px)…  [Shift]=H/45°/V à la dest. · Échap = annuler`,
@@ -1132,7 +1293,7 @@ export class DrawingTools {
   startRotateOne(): void {
     this.resetState();
     this.kind = 'r1';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `R1 — désignez un objet (≤ ${px} px)…  Cote : ligne = tout · texte = libellé seul. Échap = annuler`,
@@ -1149,7 +1310,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'stretch';
     this.stretchBox = null;
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'STRETCH — 1er coin du cadre… (extrémités incluses seront déplacées). Échap = annuler',
       'info',
@@ -1164,7 +1325,7 @@ export class DrawingTools {
   startRejoin(): void {
     this.resetState();
     this.kind = 'rejoin';
-    this.viewport.setPickHandler((pt) => this.onPoint(pt));
+    this.armPick();
     this.feedback(
       'JONCTION — 1er coin du cadre (englober les extrémités de murs à raccorder)… Échap = annuler',
       'info',
@@ -1180,7 +1341,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'join';
     this.joinStem = null;
-    this.viewport.setPickHandler((pt) => this.onJoinPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `JOIN — 1) mur à prolonger (clic près du bout voulu, ≤ ${px} px)… Échap = fin`,
@@ -1196,7 +1357,7 @@ export class DrawingTools {
     this.resetState();
     this.kind = 'corner';
     this.cornerFirst = null;
-    this.viewport.setPickHandler((pt) => this.onCornerPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     this.feedback(
       `CORNER — 1) 1er mur (clic du côté à garder, ≤ ${px} px)… Échap = fin`,
@@ -1224,7 +1385,7 @@ export class DrawingTools {
     this.paralTarget = null;
     this.paralDesignatePt = null;
     this.designation?.clear();
-    this.viewport.setPickHandler((pt) => this.onParalPoint(pt));
+    this.armPick();
     const px = this.viewport.snapRadiusPx();
     if (this.paralOffset != null) {
       this.feedback(
@@ -1256,7 +1417,7 @@ export class DrawingTools {
     }
     this.resetState();
     this.kind = 'obj';
-    this.viewport.setPickHandler((pt) => void this.onObjOrigin(pt, false));
+    this.armPick();
     this.feedback(
       `OBJ — ${this.selection.size} élém. Cliquez l’origine (0,0,0) du futur objet…`,
       'info',
@@ -1273,7 +1434,7 @@ export class DrawingTools {
     }
     this.resetState();
     this.kind = 'extract';
-    this.viewport.setPickHandler((pt) => void this.onObjOrigin(pt, true));
+    this.armPick();
     this.feedback(
       `EXTRACT — ${this.selection.size} élém. Cliquez l’origine (0,0,0) du fichier extrait…`,
       'info',
@@ -1301,7 +1462,87 @@ export class DrawingTools {
       );
       this.updatePreview();
     });
-    this.viewport.setPickHandler((pt) => this.onPlaceObjectPoint(pt));
+    this.armPick();
+  }
+
+  /**
+   * /iw · /insertinwall — pose un objet library/insertions/ sur un mur, une ligne ou un arc.
+   * step 0 = désigner l’hôte · step 1 = étirer X (souris ou valeur).
+   */
+  startInsertInHost(tab: string, name: string): void {
+    this.resetState();
+    this.kind = 'insertin';
+    this.placeTab = tab;
+    this.placeName = name;
+    this.insertHit = null;
+    this.insertFlipAlt = false;
+    this.insertFlipCtrl = false;
+    this.insertLength = 1;
+    this.insertXSign = 1;
+    this.bindInsertModifiers();
+    void objectDefCache.ensure(tab, name).then((doc) => {
+      if (!doc) {
+        this.feedback(`Impossible de charger library/${tab}/${name}.gkd`, 'err');
+        this.resetState();
+        return;
+      }
+      if (!hasAnchorPoint(doc.entities)) {
+        this.feedback(
+          `« ${name} » n’a pas de point d’ancrage (calque −9). Obligatoire pour une insertion.`,
+          'err',
+        );
+        this.resetState();
+        return;
+      }
+      if (!hasInsertLayers(doc.entities)) {
+        this.feedback(
+          `Avertissement : « ${name} » n’a pas de calques d’insertion (−1…−127). Il n’a pas été créé spécifiquement pour être inclus dans un mur ou une ligne.`,
+          'warn',
+        );
+      }
+      const px = this.viewport.snapRadiusPx();
+      this.feedback(
+        `INSERTION « ${name} » — désignez le mur, la ligne ou l’arc (≤ ${px} px). Puis étirez la longueur (souris ou dx 1.2). Sur un mur, la largeur suit l’épaisseur et les traits sont coupés. [ALT]=autre côté  [CTRL]=miroir.`,
+        'info',
+      );
+      this.updatePreview();
+    });
+    this.armPick();
+  }
+
+  /**
+   * Valeur numérique pendant un outil (ex. largeur X de l’insertion).
+   * Retourne true si consommée.
+   */
+  acceptNumber(n: number): boolean {
+    if (this.kind !== 'insertin' || this.step !== 1) return false;
+    if (!Number.isFinite(n) || n === 0) {
+      this.feedback('Longueur invalide (ex. 1.2 ou dx 1.2).', 'err');
+      return true;
+    }
+    this.insertXSign = n < 0 ? -1 : 1;
+    this.insertLength = Math.max(0.001, Math.abs(n));
+    this.commitInsert();
+    return true;
+  }
+
+  /**
+   * `dx 1.2` / `dx 1,2` pendant l’étirement : longueur le long du mur.
+   * Retourne true si la ligne a été consommée.
+   */
+  acceptInsertSpec(raw: string): boolean {
+    if (this.kind !== 'insertin' || this.step !== 1) return false;
+    const m = /^dx\s*([+-]?\d+(?:[.,]\d+)?)$/i.exec(raw.trim());
+    if (!m) return false;
+    const n = Number(m[1]!.replace(',', '.'));
+    if (!Number.isFinite(n) || n === 0) {
+      this.feedback('Longueur invalide. Ex. dx 1.2', 'err');
+      return true;
+    }
+    this.insertXSign = n < 0 ? -1 : 1;
+    this.insertLength = Math.abs(n);
+    this.commitInsert();
+    return true;
   }
 
   /**
@@ -1336,7 +1577,7 @@ export class DrawingTools {
     for (const o of objs) {
       if (o.kind !== 'object') continue;
       removeIds.push(o.id);
-      parts.push(...expandObjectEntities(o));
+      parts.push(...expandObjectEntities(o, undefined, this.doc.entities));
     }
     for (const p of polys) {
       if (p.kind !== 'polyline') continue;
@@ -1364,57 +1605,7 @@ export class DrawingTools {
 
   /** Point fourni par la ligne de commande (sans /). */
   acceptPoint(pt: Vec3): boolean {
-    if (!this.kind) return false;
-    if (this.kind === 'cut') {
-      this.onCutPoint(pt);
-      return true;
-    }
-    if (this.kind === 'trim') {
-      this.onTrimPoint(pt);
-      return true;
-    }
-    if (this.kind === 'extend') {
-      this.onExtendPoint(pt);
-      return true;
-    }
-    if (this.kind === 'corner') {
-      this.onCornerPoint(pt);
-      return true;
-    }
-    if (this.kind === 'fill') {
-      void this.onFillPoint(pt);
-      return true;
-    }
-    if (this.kind === 'delh') {
-      this.onDelHatchPoint(pt);
-      return true;
-    }
-    if (this.kind === 'deletepick') {
-      this.onDeletePickPoint(pt);
-      return true;
-    }
-    if (this.kind === 'helperaxis') {
-      this.onHelperAxisPoint(pt);
-      return true;
-    }
-    if (this.kind === 'paral') {
-      this.onParalPoint(pt);
-      return true;
-    }
-    if (this.kind === 'obj') {
-      void this.onObjOrigin(pt, false);
-      return true;
-    }
-    if (this.kind === 'extract') {
-      void this.onObjOrigin(pt, true);
-      return true;
-    }
-    if (this.kind === 'placeobj') {
-      this.onPlaceObjectPoint(pt);
-      return true;
-    }
-    this.onPoint(pt);
-    return true;
+    return dispatchPoint(this as unknown as ToolDispatch, pt, 'click');
   }
 
   /**
@@ -1429,7 +1620,7 @@ export class DrawingTools {
       const circle = createCircleEntity(this.p0, this.radius, this.pen.strokeFields());
       this.doc.addEntity(circle);
       this.feedback(
-        `Cercle r=${this.radius.toFixed(3)} m (Échap) — ${this.pen.resolved.colorLabel}.`,
+        `Cercle r=${this.fmtLen(this.radius)} (Échap) — ${this.pen.resolved.colorLabel}.`,
         'ok',
       );
       this.resetState();
@@ -1456,6 +1647,11 @@ export class DrawingTools {
     if (this.kind === 'point') {
       this.resetState();
       this.feedback('Placement de points terminé.', 'ok');
+      return;
+    }
+    if (this.kind === 'anchor') {
+      this.resetState();
+      this.feedback('Ancrage annulé.', 'warn');
       return;
     }
     if (this.kind === 'cote') {
@@ -1549,7 +1745,8 @@ export class DrawingTools {
       this.kind === 'delh' ||
       this.kind === 'deletepick' ||
       this.kind === 'helperaxis' ||
-      this.kind === 'point'
+      this.kind === 'point' ||
+      this.kind === 'anchor'
     ) {
       // Point : pas de rubber-band (effet au clic uniquement)
       this.viewport.setPreview(null);
@@ -1611,6 +1808,11 @@ export class DrawingTools {
           lineStyle: s.lineStyle,
         })),
       );
+      return;
+    }
+
+    if (this.kind === 'insertin') {
+      this.previewInsert(cur);
       return;
     }
 
@@ -1952,141 +2154,18 @@ export class DrawingTools {
       this.copyMode === 'designate' || this.kind === 'paral'
         ? '#ffb74d'
         : '#4fc3f7';
-    const strokes: {
-      points: Vec3[];
-      color: string;
-      lineWidth: number;
-      lineStyle: import('./types').LineStyleId;
-    }[] = [];
-
+    const strokes: PreviewStroke[] = [];
     for (const e of ents) {
-      if (e.kind === 'line') {
-        strokes.push({
-          points: [
-            [e.start[0] + dx, e.start[1] + dy, e.start[2]],
-            [e.end[0] + dx, e.end[1] + dy, e.end[2]],
-          ],
-          color: previewColor,
-          lineWidth: e.lineWidth,
-          lineStyle: e.lineStyle,
-        });
-      } else if (e.kind === 'arc' || e.kind === 'circle') {
-        const samples =
-          e.kind === 'circle' ? sampleCircle(e, 32) : sampleArc(e, 32);
-        strokes.push({
-          points: samples.map(
-            (p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3,
-          ),
-          color: previewColor,
-          lineWidth: e.lineWidth,
-          lineStyle: e.lineStyle,
-        });
-      } else if (e.kind === 'wall') {
-        for (const s of wallEntityStrokes(e, 16)) {
-          strokes.push({
-            points: s.points.map(
-              (p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3,
-            ),
-            color: previewColor,
-            lineWidth: s.lineWidth,
-            lineStyle: s.lineStyle,
-          });
-        }
-      } else if (e.kind === 'object') {
-        for (const s of objectInstanceStrokes(e)) {
-          strokes.push({
-            points: s.points.map(
-              (p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3,
-            ),
-            color: previewColor,
-            lineWidth: s.lineWidth,
-            lineStyle: s.lineStyle,
-          });
-        }
-      } else if (e.kind === 'text') {
-        // Petite croix à l’emplacement du texte déplacé
-        const p: Vec3 = [
-          e.position[0] + dx,
-          e.position[1] + dy,
-          e.position[2],
-        ];
-        const h = e.height * 0.5;
-        strokes.push({
-          points: [
-            [p[0] - h, p[1], p[2]],
-            [p[0] + h, p[1], p[2]],
-          ],
-          color: previewColor,
-          lineWidth: 1,
-          lineStyle: 'plein',
-        });
-        strokes.push({
-          points: [
-            [p[0], p[1] - h, p[2]],
-            [p[0], p[1] + h, p[2]],
-          ],
-          color: previewColor,
-          lineWidth: 1,
-          lineStyle: 'plein',
-        });
-      } else if (e.kind === 'dimension') {
-        const geom = buildDimensionGeom(
-          e.style,
-          [
-            e.lineAnchor[0] + dx,
-            e.lineAnchor[1] + dy,
-            e.lineAnchor[2],
-          ],
-          e.direction,
-          e.defPoints.map(
-            (p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3,
-          ),
-        );
-        for (const s of geom.strokes) {
-          strokes.push({
-            points: s.points,
-            color: previewColor,
-            lineWidth: s.lineWidth,
-            lineStyle: s.lineStyle,
-          });
-        }
-      } else if (e.kind === 'polyline') {
-        for (const s of polylineStrokes(e, 24)) {
-          strokes.push({
-            points: s.points.map(
-              (p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3,
-            ),
-            color: previewColor,
-            lineWidth: s.lineWidth,
-            lineStyle: s.lineStyle,
-          });
-        }
-      } else if (e.kind === 'point') {
-        const p: Vec3 = [
-          e.position[0] + dx,
-          e.position[1] + dy,
-          e.position[2],
-        ];
-        const h = Math.max(0.02, (e.lineWidth * 0.5) * this.viewport.worldPerPixel());
-        strokes.push({
-          points: [
-            [p[0] - h, p[1], p[2]],
-            [p[0] + h, p[1], p[2]],
-          ],
-          color: previewColor,
-          lineWidth: e.lineWidth,
-          lineStyle: 'plein',
-        });
-        strokes.push({
-          points: [
-            [p[0], p[1] - h, p[2]],
-            [p[0], p[1] + h, p[2]],
-          ],
-          color: previewColor,
-          lineWidth: e.lineWidth,
-          lineStyle: 'plein',
-        });
-      }
+      appendEntityPreview(e, strokes, {
+        color: previewColor,
+        dx,
+        dy,
+        pointMark: 'cross',
+        worldPerPixel: this.viewport.worldPerPixel(),
+        polySamples: 24,
+        dimension: 'offset',
+        unit: this.doc.units,
+      });
     }
     // Vecteur de déplacement
     strokes.push({
@@ -2158,7 +2237,7 @@ export class DrawingTools {
   ): import('./types').Vec3[] {
     // Uniquement les murs qui se touchent vraiment (même point).
     // 50 cm faisait « accrocher » un mur voisin au clic gauche.
-    const TOL = WALL_JOIN_TOL;
+    const TOL = metersToDoc(TOL_M.wallJoin, this.doc.units);
     let endWall: import('./types').WallEntity | null = null;
     let best = TOL;
     for (const w of this.doc.walls) {
@@ -2324,6 +2403,7 @@ export class DrawingTools {
     else if (this.kind === 'pmarc') this.onPmarcPoint(pt);
     else if (this.kind === 'pmarct') this.onPmarctPoint(pt);
     else if (this.kind === 'point') this.onPointPlace(pt);
+    else if (this.kind === 'anchor') this.placeAnchor(pt, true);
     else if (this.kind === 'wallline') this.onWallLinePoint(pt);
     else if (this.kind === 'wallarc') this.onWallArcPoint(pt);
     else if (this.kind === 'arcc') this.onArccPoint(pt);
@@ -2340,6 +2420,7 @@ export class DrawingTools {
     else if (this.kind === 'join') this.onJoinPoint(pt);
     else if (this.kind === 'corner') this.onCornerPoint(pt);
     else if (this.kind === 'placeobj') this.onPlaceObjectPoint(pt);
+    else if (this.kind === 'insertin') this.onInsertInPoint(pt);
     else if (this.kind === 'paral') this.onParalPoint(pt);
     else if (this.kind === 'dist') this.onDistPoint(pt);
     else if (this.kind === 'rect') this.onRectPoint(pt);
@@ -2485,32 +2566,17 @@ export class DrawingTools {
   }
 
   private onDistPoint(pt: Vec3): void {
-    if (this.step === 0) {
-      this.p0 = [...pt] as Vec3;
-      this.step = 1;
-      this.feedback(
-        `DIST — 1er point (${fmt(pt)}). 2ᵉ point…  ·  Échap = fin`,
-        'ok',
-      );
-      return;
-    }
-    if (!this.p0) return;
-    const d = dist(this.p0, pt);
-    const unit = this.viewport.getUnits();
-    const digits = unit === 'mm' ? 1 : unit === 'cm' ? 2 : 3;
-    const label = formatLength(d, unit, digits);
-    // Δ par axe (utile pour repérage)
-    const dx = pt[0]! - this.p0[0]!;
-    const dy = pt[1]! - this.p0[1]!;
-    const dz = pt[2]! - this.p0[2]!;
-    const f = (v: number) => formatLength(v, unit, digits);
-    this.feedback(
-      `DIST = ${label}   (Δx ${f(dx)}, Δy ${f(dy)}, Δz ${f(dz)})   ·  recliquer 1er point, Échap = fin`,
-      'ok',
-    );
-    this.p0 = null;
-    this.step = 0;
-    this.viewport.setPreview(null);
+    const next = distStep({
+      pt,
+      step: this.step,
+      p0: this.p0,
+      unit: this.doc.units,
+      feedback: (m, l) => this.feedback(m, l),
+      formatPt: fmt,
+    });
+    this.step = next.step;
+    this.p0 = next.p0;
+    if (next.clearPreview) this.viewport.setPreview(null);
   }
 
   private onJoinPoint(pt: Vec3): void {
@@ -2575,7 +2641,7 @@ export class DrawingTools {
       this.doc.entities,
       stemId,
       hitT.wall.id,
-      { clickOnStem: stemClick },
+      { clickOnStem: stemClick, unit: this.doc.units },
     );
     if (!result.ok) {
       this.feedback(`JOIN — ${result.reason}`, 'warn');
@@ -2588,7 +2654,7 @@ export class DrawingTools {
     this.designation?.clear();
     this.joinStem = null;
     this.feedback(
-      `JOIN ${result.mode} — allongé de ${result.lengthened.toFixed(3)} m ` +
+      `JOIN ${result.mode} — allongé de ${this.fmtLen(result.lengthened)} ` +
         `(${result.which === 'start' ? 'début' : 'fin'}). ` +
         `Recliquer un mur source, ou Échap.`,
       'ok',
@@ -2636,6 +2702,7 @@ export class DrawingTools {
       clickA,
       hitB.wall.id,
       pt,
+      this.doc.units,
     );
     if (!result.ok) {
       this.feedback(`CORNER — ${result.reason}`, 'warn');
@@ -2750,7 +2817,7 @@ export class DrawingTools {
     this.doc.addEntities(copies);
     const chain = this.chainParalToLastCopy(copies, t);
     this.feedback(
-      `PARAL — copie Δ=(${t[0].toFixed(3)}, ${t[1].toFixed(3)}, ${t[2].toFixed(3)}). « ${chain?.kind ?? 'copie'} » désigné(e) — recliquez l’emplacement pour enchaîner, Échap = fin.`,
+      `PARAL — copie Δ=(${this.fmtLen(t[0])}, ${this.fmtLen(t[1])}, ${this.fmtLen(t[2])}). « ${chain?.kind ?? 'copie'} » désigné(e) — recliquez l’emplacement pour enchaîner, Échap = fin.`,
       'ok',
     );
   }
@@ -2873,7 +2940,7 @@ export class DrawingTools {
       return;
     }
     if (e.kind === 'wall') {
-      const strokes = wallEntityStrokes(e, 16).map((s) => ({
+      const strokes = wallEntityStrokes(e, 16, this.doc.units).map((s) => ({
         points: s.points.map(
           (p): Vec3 => [p[0] + t[0], p[1] + t[1], p[2] + t[2]],
         ),
@@ -2950,6 +3017,198 @@ export class DrawingTools {
     );
     // Reste en mode place pour enchaîner
     this.viewport.setPreviewStrokes(null);
+  }
+
+  private previewInsert(cur: Vec3): void {
+    if (!this.placeTab || !this.placeName) {
+      this.viewport.setPreviewStrokes(null);
+      this.viewport.setOpeningPreview(null);
+      return;
+    }
+    const def = objectDefCache.get(this.placeTab, this.placeName);
+    if (!def) {
+      this.viewport.setPreviewStrokes(null);
+      this.viewport.setOpeningPreview(null);
+      return;
+    }
+    const maxD = this.viewport.snapToleranceMeters();
+    let hit = this.insertHit;
+    let length = this.insertLength;
+    let xSign = this.insertXSign;
+    if (this.step === 0) {
+      hit = findNearestInsertHost(cur, this.doc.entities, maxD);
+      this.designation?.set(hit ? [hit.entity.id] : []);
+      length = measureOpening(def.entities).reachX;
+      xSign = 1;
+    } else if (hit) {
+      this.applyPointerLength(cur);
+      length = this.insertLength;
+      xSign = this.insertXSign;
+    }
+    if (!hit) {
+      this.viewport.setPreviewStrokes(null);
+      this.viewport.setOpeningPreview(null);
+      return;
+    }
+    const frame = composeInsertFrame(hit, def.entities, {
+      flipAlt: this.insertFlipAlt,
+      flipCtrl: this.insertFlipCtrl,
+      length,
+      xSign,
+    });
+    const strokes = previewInsertStrokes(this.placeTab, this.placeName, frame);
+    const preview = strokes.map((s) => ({
+      points: s.points,
+      color: s.color,
+      lineWidth: s.lineWidth,
+      lineStyle: s.lineStyle,
+    }));
+    preview.push({
+      points: anchorPreviewCircle(frame.origin, 0.08),
+      color: '#ffcc66',
+      lineWidth: 2,
+      lineStyle: 'plein' as const,
+    });
+    this.viewport.setPreviewStrokes(preview);
+    const spec = measureOpening(def.entities);
+    const midLx = ((spec.x0 + spec.x1) / 2) * frame.scaleX;
+    const midLy = spec.stretchAnyY
+      ? ((spec.y0 + spec.y1) / 2) * frame.scaleY + (frame.biasY ?? 0)
+      : (spec.y0 + spec.y1) / 2;
+    let rot = Math.atan2(frame.axisX[1], frame.axisX[0]);
+    if (rot > Math.PI / 2 || rot < -Math.PI / 2) rot += Math.PI;
+    this.viewport.setPreviewLabels([
+      {
+        content: formatInsertLength(length),
+        position: [
+          frame.origin[0] + frame.axisX[0] * midLx + frame.axisY[0] * midLy,
+          frame.origin[1] + frame.axisX[1] * midLx + frame.axisY[1] * midLy,
+          frame.origin[2],
+        ],
+        rotation: rot,
+        height: 0.12,
+        color: '#ffcc66',
+        bold: true,
+        background: '#141820',
+        hAlign: 1,
+        vAlign: 2,
+      },
+    ]);
+    const opening = openingFromFrame(
+      hit.entity,
+      hit.along,
+      frame,
+      def.entities,
+    );
+    this.viewport.setOpeningPreview(opening ? [opening] : null);
+  }
+
+  /** Distance souris le long de l’hôte → longueur et sens. */
+  private applyPointerLength(pt: Vec3): void {
+    if (!this.insertHit) return;
+    const fr = frameFromHit(this.insertHit, this.insertFlipAlt, this.insertFlipCtrl);
+    const proj =
+      (pt[0] - fr.origin[0]) * fr.axisX[0] +
+      (pt[1] - fr.origin[1]) * fr.axisX[1];
+    this.insertXSign = proj < 0 ? -1 : 1;
+    this.insertLength = Math.max(0.001, Math.abs(proj));
+  }
+
+  private onInsertInPoint(pt: Vec3): void {
+    if (!this.placeTab || !this.placeName) {
+      this.resetState();
+      return;
+    }
+    if (this.step === 0) {
+      const hit = findNearestInsertHost(
+        pt,
+        this.doc.entities,
+        this.viewport.snapToleranceMeters(),
+      );
+      if (!hit) {
+        this.feedback(
+          `Aucun mur, ligne ni arc dans ${this.viewport.snapRadiusPx()} px.`,
+          'warn',
+        );
+        return;
+      }
+      this.insertHit = hit;
+      const def = objectDefCache.get(this.placeTab, this.placeName);
+      this.insertLength = def ? measureOpening(def.entities).reachX : 1;
+      this.insertXSign = 1;
+      this.step = 1;
+      this.designation?.set([hit.entity.id]);
+      this.feedback(
+        `Ancré sur ${hit.entity.kind}. La longueur suit la souris (cote « dx … ») ou tapez dx 1.2. Clic = valider · Échap = annuler`,
+        'ok',
+      );
+      this.updatePreview();
+      return;
+    }
+    this.applyPointerLength(pt);
+    this.commitInsert();
+  }
+
+  private commitInsert(): void {
+    if (!this.placeTab || !this.placeName || !this.insertHit) {
+      this.resetState();
+      return;
+    }
+    const def = objectDefCache.get(this.placeTab, this.placeName);
+    if (!def) {
+      this.feedback('Définition objet absente — réessayez.', 'err');
+      return;
+    }
+    const hit = this.insertHit;
+    const frame = composeInsertFrame(hit, def.entities, {
+      flipAlt: this.insertFlipAlt,
+      flipCtrl: this.insertFlipCtrl,
+      length: this.insertLength,
+      xSign: this.insertXSign,
+    });
+    const insert: InsertPlacement = {
+      ...defaultInsertPlacement(hit.entity.id, hit.along),
+      flipAlt: this.insertFlipAlt,
+      flipCtrl: this.insertFlipCtrl,
+      scaleX: frame.scaleX,
+      scaleY: frame.scaleY,
+      scaleZ: frame.scaleZ,
+      xSign: this.insertXSign,
+    };
+    const inst = createObjectInstance(
+      this.placeTab,
+      this.placeName,
+      frame.origin,
+      rotationFromAxisX(hit.tangent),
+      { insert },
+    );
+    this.doc.addEntity(inst);
+    const where =
+      hit.entity.kind === 'wall'
+        ? 'mur (traits coupés sur l’ouverture)'
+        : hit.entity.kind;
+    this.feedback(
+      `Insertion « ${this.placeName} » · ${formatInsertLength(this.insertLength)} · ${where}. Recliquer un hôte pour une autre, Échap = fin`,
+      'ok',
+    );
+    this.insertHit = null;
+    this.insertLength = 1;
+    this.insertXSign = 1;
+    this.step = 0;
+    this.designation?.clear();
+    this.viewport.setPreviewStrokes(null);
+    this.viewport.setOpeningPreview(null);
+  }
+
+  private bindInsertModifiers(): void {
+    this.insertFlipAlt = false;
+    this.insertFlipCtrl = false;
+    this.altDown = false;
+  }
+
+  private unbindInsertModifiers(): void {
+    this.insertFlipAlt = false;
+    this.insertFlipCtrl = false;
   }
 
   private onSelectPoint(pt: Vec3): void {
@@ -3037,7 +3296,7 @@ export class DrawingTools {
       this.p0 = [...pt] as Vec3;
       this.step = 1;
       this.feedback(
-        `${copies.length} copié(s) Δ=(${dx.toFixed(3)}, ${dy.toFixed(3)}). Copie orange suit la souris — recliquer pour coller, Échap = fin.`,
+        `${copies.length} copié(s) Δ=(${this.fmtLen(dx)}, ${this.fmtLen(dy)}). Copie orange suit la souris — recliquer pour coller, Échap = fin.`,
         'ok',
       );
       this.updatePreview();
@@ -3079,7 +3338,7 @@ export class DrawingTools {
       this.selection.set(copies.map((e) => e.id));
       this.designation?.clear();
       this.feedback(
-        `${copies.length} élém. copié(s) Δ=(${dx.toFixed(3)}, ${dy.toFixed(3)}). Copie(s) sélectionnée(s) — base → arrivée pour enchaîner, Échap = fin.`,
+        `${copies.length} élém. copié(s) Δ=(${this.fmtLen(dx)}, ${this.fmtLen(dy)}). Copie(s) sélectionnée(s) — base → arrivée pour enchaîner, Échap = fin.`,
         'ok',
       );
       this.p0 = null;
@@ -3104,7 +3363,7 @@ export class DrawingTools {
     const ids = [...this.selection.selectedIds];
     const n = this.doc.translateEntities(ids, dx, dy, 0);
     this.feedback(
-      `${n} élém. déplacé(s) Δ=(${dx.toFixed(3)}, ${dy.toFixed(3)})${this.shiftDown ? ' [Shift]' : ''}`,
+      `${n} élém. déplacé(s) Δ=(${this.fmtLen(dx)}, ${this.fmtLen(dy)})${this.shiftDown ? ' [Shift]' : ''}`,
       'ok',
     );
     this.resetState();
@@ -3148,7 +3407,7 @@ export class DrawingTools {
     const ok = this.applyOneMove(dx, dy);
     this.feedback(
       ok
-        ? `M1 — déplacé Δ=(${dx.toFixed(3)}, ${dy.toFixed(3)})${this.shiftDown ? ' [Shift]' : ''}`
+        ? `M1 — déplacé Δ=(${this.fmtLen(dx)}, ${this.fmtLen(dy)})${this.shiftDown ? ' [Shift]' : ''}`
         : 'M1 — objet introuvable.',
       ok ? 'ok' : 'err',
     );
@@ -3268,42 +3527,35 @@ export class DrawingTools {
 
   private previewOneEntityOffset(e: Entity, dx: number, dy: number): void {
     const previewColor = '#ffb74d';
-    const strokes: {
-      points: Vec3[];
-      color: string;
-      lineWidth: number;
-      lineStyle: import('./types').LineStyleId;
-    }[] = [];
+    const strokes: PreviewStroke[] = [];
 
     if (e.kind === 'dimension') {
-      const geom = buildDimensionGeom(
-        e.style,
-        [e.lineAnchor[0] + dx, e.lineAnchor[1] + dy, e.lineAnchor[2]],
-        e.direction,
-        e.defPoints.map((p) => [p[0] + dx, p[1] + dy, p[2]] as Vec3),
-      );
-      for (const s of geom.strokes) {
-        strokes.push({
-          points: s.points,
-          color: previewColor,
-          lineWidth: s.lineWidth,
-          lineStyle: s.lineStyle,
-        });
-      }
-      // Aperçu du libellé lié
+      appendEntityPreview(e, strokes, {
+        color: previewColor,
+        dx,
+        dy,
+        dimension: 'offset',
+        unit: this.doc.units,
+      });
       if (e.labelId) {
         const txt = this.doc.entities.find((x) => x.id === e.labelId);
         if (txt && txt.kind === 'text') {
-          this.pushEntityPreviewStrokes(
-            translateEntity(txt, dx, dy, 0),
-            previewColor,
-            strokes,
-          );
+          appendEntityPreview(translateEntity(txt, dx, dy, 0), strokes, {
+            color: previewColor,
+            pointMark: 'hline',
+            dimension: 'entity',
+            unit: this.doc.units,
+          });
         }
       }
     } else {
-      const moved = translateEntity(e, dx, dy, 0);
-      this.pushEntityPreviewStrokes(moved, previewColor, strokes);
+      appendEntityPreview(translateEntity(e, dx, dy, 0), strokes, {
+        color: previewColor,
+        pointMark: 'hline',
+        polySamples: 24,
+        dimension: 'entity',
+        unit: this.doc.units,
+      });
     }
 
     if (this.p0) {
@@ -3320,109 +3572,15 @@ export class DrawingTools {
   private pushEntityPreviewStrokes(
     e: Entity,
     color: string,
-    strokes: {
-      points: Vec3[];
-      color: string;
-      lineWidth: number;
-      lineStyle: import('./types').LineStyleId;
-    }[],
+    strokes: PreviewStroke[],
   ): void {
-    if (e.kind === 'line') {
-      strokes.push({
-        points: [e.start, e.end],
-        color,
-        lineWidth: e.lineWidth,
-        lineStyle: e.lineStyle,
-      });
-    } else if (e.kind === 'arc' || e.kind === 'circle') {
-      const samples =
-        e.kind === 'circle' ? sampleCircle(e, 32) : sampleArc(e, 32);
-      strokes.push({
-        points: samples,
-        color,
-        lineWidth: e.lineWidth,
-        lineStyle: e.lineStyle,
-      });
-    } else if (e.kind === 'wall') {
-      for (const s of wallEntityStrokes(e, 16)) {
-        strokes.push({
-          points: s.points,
-          color,
-          lineWidth: s.lineWidth,
-          lineStyle: s.lineStyle,
-        });
-      }
-    } else if (e.kind === 'object') {
-      for (const s of objectInstanceStrokes(e)) {
-        strokes.push({
-          points: s.points,
-          color,
-          lineWidth: s.lineWidth,
-          lineStyle: s.lineStyle,
-        });
-      }
-    } else if (e.kind === 'text') {
-      const h = e.height * 0.5;
-      const p = e.position;
-      strokes.push({
-        points: [
-          [p[0] - h, p[1], p[2]],
-          [p[0] + h, p[1], p[2]],
-        ],
-        color,
-        lineWidth: 1,
-        lineStyle: 'plein',
-      });
-      strokes.push({
-        points: [
-          [p[0], p[1] - h, p[2]],
-          [p[0], p[1] + h, p[2]],
-        ],
-        color,
-        lineWidth: 1,
-        lineStyle: 'plein',
-      });
-    } else if (e.kind === 'polyline') {
-      for (const s of polylineStrokes(e, 24)) {
-        strokes.push({
-          points: s.points,
-          color,
-          lineWidth: s.lineWidth,
-          lineStyle: s.lineStyle,
-        });
-      }
-    } else if (e.kind === 'point') {
-      const p = e.position;
-      const h = 0.05;
-      strokes.push({
-        points: [
-          [p[0] - h, p[1], p[2]],
-          [p[0] + h, p[1], p[2]],
-        ],
-        color,
-        lineWidth: e.lineWidth,
-        lineStyle: 'plein',
-      });
-    } else if (e.kind === 'dimension') {
-      const geom = buildDimensionGeom(
-        e.style,
-        e.lineAnchor,
-        e.direction,
-        e.defPoints,
-        {
-          labelPositions: e.labelPositions,
-          labelRotations: e.labelRotations,
-        },
-      );
-      for (const s of geom.strokes) {
-        strokes.push({
-          points: s.points,
-          color,
-          lineWidth: s.lineWidth,
-          lineStyle: s.lineStyle,
-        });
-      }
-    }
+    appendEntityPreview(e, strokes, {
+      color,
+      pointMark: 'hline',
+      polySamples: 24,
+      dimension: 'entity',
+      unit: this.doc.units,
+    });
   }
 
   private previewOneRotate(cur: Vec3): void {
@@ -3535,7 +3693,7 @@ export class DrawingTools {
       this.viewport.setPreviewStrokes(null);
       this.feedback(
         n > 0
-          ? `STRETCH — ${n} élément(s) modifié(s) Δ=(${dx.toFixed(3)}, ${dy.toFixed(3)})`
+          ? `STRETCH — ${n} élément(s) modifié(s) Δ=(${this.fmtLen(dx)}, ${this.fmtLen(dy)})`
           : 'STRETCH — aucune extrémité / objet entier dans le cadre.',
         n > 0 ? 'ok' : 'warn',
       );
@@ -3621,7 +3779,7 @@ export class DrawingTools {
       } else {
         const near =
           first.nearestEndDist != null && Number.isFinite(first.nearestEndDist)
-            ? ` Plus proches extrémités non jointes : ${(first.nearestEndDist * 100).toFixed(0)} cm (axes sans intersection dans le cadre).`
+            ? ` Plus proches extrémités non jointes : ${this.fmtLen(first.nearestEndDist)} (axes sans intersection dans le cadre).`
             : ' Englober les extrémités à raccorder.';
         this.feedback(
           `JONCTION ${APP_VERSION} — aucun raccord (${wallsInBox.length} mur(s) dans le cadre).${near}`,
@@ -3634,10 +3792,7 @@ export class DrawingTools {
 
     // T/Y : mode interactif Y/N
     this.step = 2;
-    this.viewport.setPickHandler(
-      (p, src) => this.onRejoinPoint(p, src),
-      { rightClickAsPick: true },
-    );
+    this.armPick({ rightClickAsPick: true });
     this.announceJonctionSolution();
   }
 
@@ -3698,67 +3853,26 @@ export class DrawingTools {
     if (this.step === 3 && this.p0 && this.stretchBox) {
       const dx = cur[0] - this.p0[0];
       const dy = cur[1] - this.p0[1];
-      const previewed = previewStretch(this.doc.entities, this.stretchBox, dx, dy, 0);
-      const strokes: {
-        points: Vec3[];
-        color: string;
-        lineWidth: number;
-        lineStyle: import('./types').LineStyleId;
-      }[] = [];
+      const previewed = previewStretch(
+        this.doc.entities,
+        this.stretchBox,
+        dx,
+        dy,
+        0,
+        this.doc.units,
+      );
+      const strokes: PreviewStroke[] = [];
       const color = '#4fc3f7';
       for (const e of previewed) {
-        if (e.kind === 'line') {
-          strokes.push({
-            points: [e.start, e.end],
-            color,
-            lineWidth: e.lineWidth,
-            lineStyle: e.lineStyle,
-          });
-        } else if (e.kind === 'arc') {
-          strokes.push({
-            points: sampleArc(e, 32),
-            color,
-            lineWidth: e.lineWidth,
-            lineStyle: e.lineStyle,
-          });
-        } else if (e.kind === 'circle') {
-          strokes.push({
-            points: sampleCircle(e, 32),
-            color,
-            lineWidth: e.lineWidth,
-            lineStyle: e.lineStyle,
-          });
-        } else if (e.kind === 'polyline') {
-          for (const s of polylineStrokes(e, 16)) {
-            strokes.push({
-              points: s.points,
-              color,
-              lineWidth: s.lineWidth,
-              lineStyle: s.lineStyle,
-            });
-          }
-        } else if (e.kind === 'wall') {
-          for (const s of wallEntityStrokes(e, 16)) {
-            strokes.push({
-              points: s.points,
-              color,
-              lineWidth: s.lineWidth,
-              lineStyle: s.lineStyle,
-            });
-          }
-        } else if (e.kind === 'point') {
-          const h = 0.05;
-          const p = e.position;
-          strokes.push({
-            points: [
-              [p[0] - h, p[1], p[2]],
-              [p[0] + h, p[1], p[2]],
-            ],
-            color,
-            lineWidth: e.lineWidth,
-            lineStyle: 'plein',
-          });
-        }
+        appendEntityPreview(e, strokes, {
+          color,
+          pointMark: 'hline',
+          pointHalf: 0.05,
+          polySamples: 16,
+          dimension: 'entity',
+          skip: new Set(['text', 'object', 'dimension', 'helper']),
+          unit: this.doc.units,
+        });
       }
       // Vecteur base → souris
       strokes.push({
@@ -3786,12 +3900,16 @@ export class DrawingTools {
       return;
     }
 
-    const entities = extractAtOrigin(selected, pt);
+    const entities = extractAtOrigin(selected, pt, this.doc.units);
     const suggested = extract ? 'extrait' : 'objet';
 
     if (extract) {
       const name =
-        window.prompt('Nom du fichier extrait :', suggested) ?? '';
+        (await showTextInputDialog({
+          title: 'Nom du fichier extrait',
+          initial: suggested,
+          singleLine: true,
+        })) ?? '';
       if (!name.trim()) {
         this.feedback('Extraction annulée.', 'warn');
         this.resetState();
@@ -3826,17 +3944,23 @@ export class DrawingTools {
       tab = choice.tab;
       name = choice.name;
     } else {
-      const t = window.prompt(
-        'Onglet library (sanitaire, electrique, salon, chambre, …) :',
-        tab,
-      );
+      const t = await showTextInputDialog({
+        title: 'Onglet library',
+        initial: tab,
+        placeholder: 'sanitaire, electrique, salon, chambre, …',
+        singleLine: true,
+      });
       if (!t?.trim()) {
         this.feedback('Objet annulé.', 'warn');
         this.resetState();
         return;
       }
       tab = t.trim();
-      const n = window.prompt('Nom de l’objet :', name);
+      const n = await showTextInputDialog({
+        title: 'Nom de l’objet',
+        initial: name,
+        singleLine: true,
+      });
       if (!n?.trim()) {
         this.feedback('Objet annulé.', 'warn');
         this.resetState();
@@ -4140,29 +4264,13 @@ export class DrawingTools {
   }
 
   private onCutPoint(pt: Vec3): void {
-    // Rayon = snap courant (px écran) — indépendant du snap on/off
-    const maxDist = this.viewport.snapToleranceMeters();
-    const hit = findNearestCuttable(pt, this.doc.entities, maxDist);
-    if (!hit) {
-      // Rien dans le rayon : silence total
-      return;
-    }
-    const result = applyCut(hit);
-    if (!result) {
-      // Coupure dégénérée (extrémité, etc.) : silence
-      return;
-    }
-    this.doc.replaceEntity(result.removedId, result.replacements);
-    if (result.kind === 'line') {
-      this.feedback('Ligne coupée → 2 segments.', 'ok');
-    } else if (result.kind === 'arc') {
-      this.feedback('Arc coupé → 2 arcs.', 'ok');
-    } else {
-      this.feedback(
-        'Cercle ouvert au point de coupe (arc plein) — recliquer pour scinder.',
-        'ok',
-      );
-    }
+    cutAtPoint({
+      pt,
+      entities: this.doc.entities,
+      maxDist: this.viewport.snapToleranceMeters(),
+      replace: (id, reps) => this.doc.replaceEntity(id, reps),
+      feedback: (m, l) => this.feedback(m, l),
+    });
   }
 
   private findNearestPolyline(
@@ -4297,7 +4405,7 @@ export class DrawingTools {
     this.designation?.clear();
     this.extendSource = null;
     this.feedback(
-      `Allongé de ${result.lengthened.toFixed(3)} m → recliquer un objet à allonger, ou Échap.`,
+      `Allongé de ${this.fmtLen(result.lengthened)} → recliquer un objet à allonger, ou Échap.`,
       'ok',
     );
   }
@@ -4309,49 +4417,15 @@ export class DrawingTools {
 
   /** /d · Ctrl+D — efface l’entité la plus proche, reste actif jusqu’à Échap. */
   private onDeletePickPoint(pt: Vec3): void {
-    const maxDist = this.viewport.snapToleranceMeters();
-    const hit = findNearestEntity(pt, this.doc.entities, maxDist);
-    if (!hit) {
-      const px = this.viewport.snapRadiusPx();
-      this.feedback(
-        `Aucun élément dans ${px} px — cliquez plus près (ligne, arc, cercle, mur, aide, objet).`,
-        'warn',
-      );
-      return;
-    }
-    const id = hit.entity.id;
-    const kind = hit.entity.kind;
-    const ok = this.doc.removeEntity(id);
-    if (!ok) {
-      this.feedback('Échec de la suppression.', 'err');
-      return;
-    }
-    // Retirer de la sélection s’il y était (sans toucher au reste)
-    if (this.selection?.has(id)) {
-      this.selection.remove([id]);
-    }
-    const label =
-      kind === 'line'
-        ? 'ligne'
-        : kind === 'arc'
-          ? 'arc'
-          : kind === 'circle'
-            ? 'cercle'
-            : kind === 'polyline'
-              ? 'polyligne'
-              : kind === 'point'
-                ? 'point'
-                : kind === 'wall'
-                  ? 'mur'
-                  : kind === 'helper'
-                    ? 'aide'
-                    : kind === 'object'
-                      ? 'objet'
-                      : kind;
-    this.feedback(
-      `Effacé : ${label} — désignez un autre élément, ou Échap pour terminer.`,
-      'ok',
-    );
+    deletePickAtPoint({
+      pt,
+      entities: this.doc.entities,
+      maxDist: this.viewport.snapToleranceMeters(),
+      snapRadiusPx: this.viewport.snapRadiusPx(),
+      remove: (id) => this.doc.removeEntity(id),
+      selection: this.selection,
+      feedback: (m, l) => this.feedback(m, l),
+    });
   }
 
   private onPlinePoint(pt: Vec3): void {
@@ -4416,7 +4490,7 @@ export class DrawingTools {
       this.step = 1;
       this.viewport.setPreview(null);
       this.feedback(
-        `PARC — arc r=${arc.radius.toFixed(3)} m. Passage suivant…  /pline /parct · Échap = fin`,
+        `PARC — arc r=${this.fmtLen(arc.radius)}. Passage suivant…  /pline /parct · Échap = fin`,
         'ok',
       );
       void this.maybePromptPolylineClosed();
@@ -4448,7 +4522,7 @@ export class DrawingTools {
       this.viewport.setPreview(null);
       const spanDeg = ((arc.endAngle - arc.startAngle) * 180) / Math.PI;
       this.feedback(
-        `PARCT — arc tangent r=${arc.radius.toFixed(3)} m, ${spanDeg.toFixed(1)}° — suite… Échap = fin`,
+        `PARCT — arc tangent r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — suite… Échap = fin`,
         'ok',
       );
       void this.maybePromptPolylineClosed();
@@ -4491,7 +4565,7 @@ export class DrawingTools {
       this.step = 0;
       this.viewport.setPreview(null);
       this.feedback(
-        `PARCT — 1er arc r=${arc.radius.toFixed(3)} m — suite en tangente (1 clic). Échap = fin`,
+        `PARCT — 1er arc r=${this.fmtLen(arc.radius)} — suite en tangente (1 clic). Échap = fin`,
         'ok',
       );
       void this.maybePromptPolylineClosed();
@@ -4600,7 +4674,7 @@ export class DrawingTools {
       this.step = 1;
       this.viewport.setPreviewStrokes(null);
       this.feedback(
-        `PMARC — mur arc r=${arc.radius.toFixed(3)} m. Passage suivant… · Échap`,
+        `PMARC — mur arc r=${this.fmtLen(arc.radius)}. Passage suivant… · Échap`,
         'ok',
       );
       void this.maybePromptPolyWallClosed();
@@ -4637,7 +4711,7 @@ export class DrawingTools {
       this.step = 0;
       this.viewport.setPreviewStrokes(null);
       this.feedback(
-        `PMARCT — mur arc tangent r=${arc.radius.toFixed(3)} m — suite… Échap`,
+        `PMARCT — mur arc tangent r=${this.fmtLen(arc.radius)} — suite… Échap`,
         'ok',
       );
       void this.maybePromptPolyWallClosed();
@@ -4675,7 +4749,7 @@ export class DrawingTools {
       this.step = 0;
       this.viewport.setPreviewStrokes(null);
       this.feedback(
-        `PMARCT — 1er mur arc r=${arc.radius.toFixed(3)} m — suite en tangente. Échap`,
+        `PMARCT — 1er mur arc r=${this.fmtLen(arc.radius)} — suite en tangente. Échap`,
         'ok',
       );
       void this.maybePromptPolyWallClosed();
@@ -4689,14 +4763,14 @@ export class DrawingTools {
     let wall = this.getActivePolyWall();
     if (!wall) {
       wall = createEmptyPolyWall(style, this.wallFlip);
-      wall = appendWallSegment(wall, seg);
+      wall = appendWallSegment(wall, seg, this.doc.units);
       this.doc.addEntity(wall);
       this.pwallId = wall.id;
       return;
     }
     // flip / style snapshot : garder flip courant
     const base = { ...wall, flip: this.wallFlip };
-    const updated = appendWallSegment(base, seg);
+    const updated = appendWallSegment(base, seg, this.doc.units);
     this.doc.replaceEntity(wall.id, [updated]);
     this.pwallId = updated.id;
   }
@@ -4710,7 +4784,7 @@ export class DrawingTools {
     const start = polyWallStart(wall);
     const end = polyWallEnd(wall);
     if (!start || !end) return;
-    if (dist(start, end) > POLY_CLOSE_TOL) return;
+    if (dist(start, end) > this.polyCloseTol()) return;
 
     this.doc.replaceEntity(wall.id, [{ ...wall, closed: true }]);
 
@@ -4750,7 +4824,7 @@ export class DrawingTools {
     const start = polylineStart(poly);
     const end = polylineEnd(poly);
     if (!start || !end) return;
-    if (dist(start, end) > POLY_CLOSE_TOL) return;
+    if (dist(start, end) > this.polyCloseTol()) return;
 
     // Marquer fermée avant le dialogue
     this.doc.replaceEntity(poly.id, [{ ...poly, closed: true }]);
@@ -4781,15 +4855,15 @@ export class DrawingTools {
 
   private onPointPlace(pt: Vec3): void {
     const r = this.pen.resolved;
-    const ent = createPointEntity(pt, {
+    placePointEntity({
+      pt,
       color: r.color,
       lineWidth: r.lineWidth,
+      colorLabel: r.colorLabel,
+      add: (ent) => this.doc.addEntity(ent),
+      feedback: (m, l) => this.feedback(m, l),
+      formatPt: fmt,
     });
-    this.doc.addEntity(ent);
-    this.feedback(
-      `Point @ (${fmt(pt)})  [${r.colorLabel}, ${r.lineWidth}×${r.lineWidth} px] — recliquer, Échap = fin`,
-      'ok',
-    );
   }
 
   private onLinePoint(pt: Vec3): void {
@@ -4838,7 +4912,7 @@ export class DrawingTools {
       this.radius = Math.hypot(pt[0] - this.p0[0], pt[1] - this.p0[1]);
       this.step = 2;
       this.feedback(
-        `ARCC — r=${this.radius.toFixed(3)} m. Échap = cercle · ou clic = début d’arc…`,
+        `ARCC — r=${this.fmtLen(this.radius)}. Échap = cercle · ou clic = début d’arc…`,
         'ok',
       );
       return;
@@ -4867,7 +4941,7 @@ export class DrawingTools {
       this.doc.addEntity(arc);
       const spanDeg = ((arc.endAngle - arc.startAngle) * 180) / Math.PI;
       this.feedback(
-        `Arc r=${arc.radius.toFixed(3)} m, balayage ${spanDeg.toFixed(1)}° — centre suivant, ou Échap.`,
+        `Arc r=${this.fmtLen(arc.radius)}, balayage ${spanDeg.toFixed(1)}° — centre suivant, ou Échap.`,
         'ok',
       );
       // Enchaîne un nouvel arcc
@@ -4928,7 +5002,7 @@ export class DrawingTools {
       this.contTangent = arcEndTangent(arc);
       const spanDeg = ((arc.endAngle - arc.startAngle) * 180) / Math.PI;
       this.feedback(
-        `Arc cont. r=${arc.radius.toFixed(3)} m, ${spanDeg.toFixed(1)}° — point suivant (Échap termine).`,
+        `Arc cont. r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — point suivant (Échap termine).`,
         'ok',
       );
       this.viewport.setPreview(null);
@@ -4973,12 +5047,12 @@ export class DrawingTools {
       this.p1 = null;
       this.step = 0;
       this.feedback(
-        `1er arc r=${arc.radius.toFixed(3)} m, ${spanDeg.toFixed(1)}° — suite continue (tangente). Échap termine.`,
+        `1er arc r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — suite continue (tangente). Échap termine.`,
         'ok',
       );
     } else {
       this.feedback(
-        `Arc r=${arc.radius.toFixed(3)} m, balayage ${spanDeg.toFixed(1)}° — départ suivant, ou Échap.`,
+        `Arc r=${this.fmtLen(arc.radius)}, balayage ${spanDeg.toFixed(1)}° — départ suivant, ou Échap.`,
         'ok',
       );
       this.p0 = null;
@@ -5003,7 +5077,7 @@ export class DrawingTools {
     const circle = createCircleEntity(this.p0, r, this.pen.strokeFields());
     this.doc.addEntity(circle);
     this.feedback(
-      `Cercle r=${r.toFixed(3)} m — centre suivant, ou Échap pour terminer.`,
+      `Cercle r=${this.fmtLen(r)} — centre suivant, ou Échap pour terminer.`,
       'ok',
     );
     this.p0 = null;
@@ -5011,60 +5085,21 @@ export class DrawingTools {
     this.viewport.setPreview(null);
   }
 
+  /** Le basculement ALT est porté par ModifierTracker. */
   private bindAltFlip(): void {
-    this.unbindAltFlip();
-    this.altHandler = (e: KeyboardEvent) => {
-      if (e.key !== 'Alt' || e.repeat) return;
-      if (
-        this.kind !== 'wallline' &&
-        this.kind !== 'wallarc' &&
-        !this.isPolyWallTool()
-      ) {
-        return;
-      }
-      e.preventDefault();
-      this.wallFlip = !this.wallFlip;
-      // Polymur déjà posé : mettre à jour le flip de l’entité
-      const pw = this.getActivePolyWall();
-      if (pw) {
-        this.doc.replaceEntity(pw.id, [{ ...pw, flip: this.wallFlip }]);
-      }
-      this.feedback(
-        `Mur côté ${this.wallFlip ? 'inversé (flip)' : 'normal'} — [ALT] pour basculer.`,
-        'info',
-      );
-      this.updatePreview();
-    };
-    window.addEventListener('keydown', this.altHandler);
+    // Écouteur unique : onModifier bascule wallFlip quand un outil mur est actif.
   }
 
   private unbindAltFlip(): void {
-    if (this.altHandler) {
-      window.removeEventListener('keydown', this.altHandler);
-      this.altHandler = null;
-    }
+    // Ne pas retirer le tracker global entre deux outils.
   }
 
   /** Suit l’état de la touche ALT (select = désélection). */
   private bindAltTrack(): void {
-    this.unbindAltTrack();
     this.altDown = false;
-    this.altTrack = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') {
-        this.altDown = e.type === 'keydown';
-        if (this.kind === 'select') this.updatePreview();
-      }
-    };
-    window.addEventListener('keydown', this.altTrack);
-    window.addEventListener('keyup', this.altTrack);
   }
 
   private unbindAltTrack(): void {
-    if (this.altTrack) {
-      window.removeEventListener('keydown', this.altTrack);
-      window.removeEventListener('keyup', this.altTrack);
-      this.altTrack = null;
-    }
     this.altDown = false;
   }
 
@@ -5078,6 +5113,7 @@ export class DrawingTools {
     }
     this.unbindAltFlip();
     this.unbindAltTrack();
+    this.unbindInsertModifiers();
     this.kind = null;
     this.step = 0;
     this.p0 = null;
@@ -5088,6 +5124,11 @@ export class DrawingTools {
     this.wallFlip = false;
     this.placeTab = null;
     this.placeName = null;
+    this.insertHit = null;
+    this.insertFlipAlt = false;
+    this.insertFlipCtrl = false;
+    this.insertLength = 1;
+    this.insertXSign = 1;
     this.paralDeltas = null;
     this.paralOffset = null;
     this.paralTarget = null;
@@ -5121,6 +5162,7 @@ export class DrawingTools {
     this.viewport.setPreview(null);
     this.viewport.setPreviewStrokes(null);
     this.viewport.setPreviewLabels(null);
+    this.viewport.setOpeningPreview(null);
     this.viewport.setSelectRect(null, null);
   }
 }
@@ -5132,36 +5174,6 @@ function shortText(s: string, max = 24): string {
 }
 
 const EPS = 1e-9;
-
-/**
- * Verrouille le segment origin→target sur le multiple de 45° le plus proche
- * (horizontal, 45°, vertical, …). Conserve la distance souris.
- */
-function constrainAxis45(origin: Vec3, target: Vec3): Vec3 {
-  const dx = target[0] - origin[0];
-  const dy = target[1] - origin[1];
-  const L = Math.hypot(dx, dy);
-  if (L < EPS) return [target[0], target[1], target[2]];
-  const ang = Math.atan2(dy, dx);
-  const step = Math.PI / 4; // 45°
-  const snapped = Math.round(ang / step) * step;
-  return [
-    origin[0] + L * Math.cos(snapped),
-    origin[1] + L * Math.sin(snapped),
-    origin[2],
-  ];
-}
-
-function projectOnCircle(center: Vec3, radius: number, pt: Vec3): Vec3 {
-  const dx = pt[0] - center[0];
-  const dy = pt[1] - center[1];
-  const L = Math.hypot(dx, dy);
-  if (L < EPS) {
-    return [center[0] + radius, center[1], center[2]];
-  }
-  const s = radius / L;
-  return [center[0] + dx * s, center[1] + dy * s, center[2]];
-}
 
 function fmt(p: Vec3): string {
   return `${p[0].toFixed(3)}, ${p[1].toFixed(3)}, ${p[2].toFixed(3)}`;

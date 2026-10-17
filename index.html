@@ -19,11 +19,14 @@
       <div id="style-bar" aria-label="Styles trait, texte et cotation"></div>
 
       <main id="viewport-wrap">
-        <canvas id="viewport" tabindex="0" aria-label="Zone de dessin 3D"></canvas>
-        <div id="axis-gizmo" aria-hidden="true">
-          <span class="ax x">X</span>
-          <span class="ax y">Y</span>
-          <span class="ax z">Z</span>
+        <aside id="insert-layer-rail" class="insert-layer-rail hidden" hidden></aside>
+        <div id="viewport-stage">
+          <canvas id="viewport" tabindex="0" aria-label="Zone de dessin 3D"></canvas>
+          <div id="axis-gizmo" aria-hidden="true">
+            <span class="ax x">X</span>
+            <span class="ax y">Y</span>
+            <span class="ax z">Z</span>
+          </div>
         </div>
       </main>
 

@@ -143,6 +143,11 @@ export class Viewport {
     this.loop();
   }
 
+  /** Recalcule la taille (liste des calques spéciaux, redimensionnement). */
+  resizeNow(): void {
+    this.resize();
+  }
+
   setSnapHandler(fn: SnapHandler | null): void {
     this.onSnap = fn;
   }
@@ -150,10 +155,12 @@ export class Viewport {
   setAppPrefs(prefs: AppPrefsManager): void {
     this.appPrefs = prefs;
     this.units = prefs.units;
+    this.entityLayer.setDocUnit(prefs.units);
     this.gridSpacingMeters = prefs.gridSpacingMeters;
     this.rebuildGrid(true);
     prefs.onChange((p) => {
       this.units = p.units;
+      this.entityLayer.setDocUnit(p.units);
       this.gridSpacingMeters = p.gridSpacingMeters;
       this.rebuildGrid(true);
       this.refreshUiLabels();
@@ -167,6 +174,7 @@ export class Viewport {
 
   setUnits(unit: UnitId): void {
     this.units = unit;
+    this.entityLayer.setDocUnit(unit);
     this.rebuildGrid(true);
     this.refreshUiLabels();
   }
@@ -241,6 +249,13 @@ export class Viewport {
     labels: import('./EntityLayer').PreviewLabel[] | null,
   ): void {
     this.entityLayer.setPreviewLabels(labels);
+  }
+
+  /** Trou d’insertion en cours de pose (traits de mur coupés en direct). */
+  setOpeningPreview(
+    openings: readonly import('../core/insertOpening').OpeningInterval[] | null,
+  ): void {
+    this.entityLayer.setOpeningPreview(openings);
   }
 
   setSelectedIds(ids: ReadonlySet<string> | Iterable<string>): void {
@@ -624,7 +639,10 @@ export class Viewport {
     return this.appPrefs?.snap.radiusPx ?? DEFAULT_SNAP_RADIUS_PX;
   }
 
-  /** Tolérance d'accrochage en mètres (pixels × échelle vue). */
+  /**
+   * Tolérance d'accrochage en unités document (pixels × échelle vue).
+   * Le nom historique dit « mètres » : la valeur est déjà dans l'unité du dessin.
+   */
   snapToleranceMeters(): number {
     return this.worldPerPixel() * this.snapRadiusPx();
   }
@@ -644,6 +662,8 @@ export class Viewport {
     this.entityLayer.dispose();
     this.renderer.dispose();
     window.removeEventListener('resize', this.onResize);
+    this.wrapObserver?.disconnect();
+    this.wrapObserver = null;
   }
 
   private activeCamera(): THREE.Camera {
@@ -680,8 +700,15 @@ export class Viewport {
     }
   }
 
+  private wrapObserver: ResizeObserver | null = null;
+
   private bindEvents(): void {
     window.addEventListener('resize', this.onResize);
+    const wrap = this.canvas.parentElement;
+    if (wrap && typeof ResizeObserver !== 'undefined') {
+      this.wrapObserver = new ResizeObserver(() => this.resize());
+      this.wrapObserver.observe(wrap);
+    }
     this.canvas.addEventListener('pointermove', this.onPointerMove);
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointerup', this.onPointerUp);
@@ -787,8 +814,8 @@ export class Viewport {
     let snap: SnapResult | null = null;
 
     if (this.isSnapEnabled()) {
-      const curves = entitiesToSnapCurves(this.helpers, this.entities);
-      snap = snapAt(click, curves, this.snapToleranceMeters());
+      const curves = entitiesToSnapCurves(this.helpers, this.entities, this.units);
+      snap = snapAt(click, curves, this.snapToleranceMeters(), this.units);
     }
 
     // Accroche nœud de grille si aucun snap objet, grille visible + /gridsnap on

@@ -9,6 +9,8 @@ import {
   type UnitId,
 } from './units';
 
+export type InsertLayerRailSide = 'left' | 'right';
+
 export interface SnapPrefs {
   /** Accroche clic droit active. */
   enabled: boolean;
@@ -49,6 +51,11 @@ export interface AppPrefsFile {
    * Un même fichier n’apparaît qu’une fois (remonté en tête).
    */
   recentFiles?: RecentFileEntry[];
+  /**
+   * Côté de la liste des calques spéciaux (−1…−127)
+   * pendant la création / modification d’un objet d’insertion.
+   */
+  insertLayerRailSide?: InsertLayerRailSide;
 }
 
 /** Entrée de l’historique fichiers (/openlast). */
@@ -78,6 +85,7 @@ export function defaultAppPrefs(): AppPrefsFile {
     gridVisible: true,
     gridSnap: false,
     gridOffDisablesSnap: true,
+    insertLayerRailSide: 'left',
   };
 }
 
@@ -127,6 +135,9 @@ function normalize(raw: unknown): AppPrefsFile {
       if (recent.length >= RECENT_FILES_MAX) break;
     }
     if (recent.length > 0) base.recentFiles = recent;
+  }
+  if (o.insertLayerRailSide === 'left' || o.insertLayerRailSide === 'right') {
+    base.insertLayerRailSide = o.insertLayerRailSide;
   }
   return base;
 }
@@ -234,6 +245,17 @@ export class AppPrefsManager {
   /** Dernier fichier ouvert / enregistré, ou null. */
   get lastRecentFile(): RecentFileEntry | null {
     return this.prefs.recentFiles?.[0] ?? null;
+  }
+
+  get insertLayerRailSide(): InsertLayerRailSide {
+    return this.prefs.insertLayerRailSide === 'right' ? 'right' : 'left';
+  }
+
+  setInsertLayerRailSide(side: InsertLayerRailSide): void {
+    if (side !== 'left' && side !== 'right') return;
+    if (this.prefs.insertLayerRailSide === side) return;
+    this.prefs.insertLayerRailSide = side;
+    this.emit();
   }
 
   onChange(fn: AppPrefsListener): () => void {

@@ -56,8 +56,42 @@ export interface EntityBase {
   id: string;
   kind: EntityKind;
   layer: string;
+  /**
+   * Calque de dessin : **1–127** (ordre d’affichage, 1 = fond, 127 = devant)
+   * ou **−1…−127** (objets insertions : étirement / ancre).
+   * Pas de couche 0. Absent (anciens .gkd) = **1**.
+   */
+  drawLayer?: number;
   /** true = ligne d'aide (sous-couche, snap, effaçable en masse). */
   isHelper?: boolean;
+}
+
+/**
+ * Pose d’un objet `library/insertions/` dans un hôte (mur / ligne / arc).
+ * Les calques négatifs de la définition pilotent l’étirement.
+ */
+export interface InsertPlacement {
+  hostId: string;
+  /** Abscisse curviligne sur l’hôte (m), depuis le départ. */
+  along: number;
+  /** [ALT] : intérieur ↔ extérieur (miroir sur la 1ʳᵉ ligne). */
+  flipAlt: boolean;
+  /** [CTRL] : miroir le long de l’hôte. */
+  flipCtrl: boolean;
+  /**
+   * Multiplicateur X des parties étirables.
+   * Longueur finale ≈ `scaleX ×` portée X de la définition
+   * (1 m dessiné et `scaleX` 1,2 → 1,2 m).
+   */
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  /**
+   * +1 : +X local dans le sens de l’hôte.
+   * −1 : sens inverse (la longueur suit la souris de l’autre côté de l’ancre).
+   * Absent = +1.
+   */
+  xSign?: 1 | -1;
 }
 
 export interface StrokeStyle {
@@ -428,6 +462,8 @@ export interface ObjectInstanceEntity extends EntityBase {
   origin: Vec3;
   /** Rotation autour de Z (radians), défaut 0. */
   rotation: number;
+  /** Présent si l’instance est une insertion dans un mur / ligne / arc. */
+  insert?: InsertPlacement;
 }
 
 export type Entity =
@@ -450,6 +486,12 @@ export interface ObjectDef {
   data: unknown;
 }
 
+export interface DrawLayerLabel {
+  id: number;
+  /** 255 caractères max. */
+  label: string;
+}
+
 export interface GkdDocument {
   /** Numéro magique — doit être GKD1. */
   magic: 'GKD1';
@@ -461,6 +503,13 @@ export interface GkdDocument {
   entities: Entity[];
   wallLibrary: WallStyle[];
   objectLibrary: ObjectDef[];
+  /**
+   * Libellés personnalisés des calques (seuls les non-défaut sont stockés).
+   * Anciens fichiers : tableau absent — pas de calques négatifs inventés.
+   */
+  drawLayers?: DrawLayerLabel[];
+  /** Calque courant à la sauvegarde (1–127, ou négatif si fichier insertions). */
+  currentDrawLayer?: number;
   meta?: {
     title?: string;
     /** Unité monde (défaut m). */
@@ -468,5 +517,5 @@ export interface GkdDocument {
   };
 }
 
-export const APP_VERSION = '0.24.16';
+export const APP_VERSION = '0.25.4';
 export const GKD_MAGIC = 'GKD1' as const;

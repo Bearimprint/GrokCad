@@ -29,10 +29,12 @@ import type {
 } from './types';
 export type { JonctionStrategyId } from './types';
 import { layerPriorityOf, wallLineJoinPriority } from './wallLayerCatalog';
+import type { UnitId } from './units';
+import { ANG, metersToDoc, TOL_M } from './tolerances';
 
 const EPS = 1e-9;
-/** Tolérance de coïncidence des extrémités (m — ~5 mm). */
-export const WALL_JOIN_TOL = 0.005;
+/** Coïncidence des extrémités, en mètres (5 mm). Convertir avec `metersToDoc`. */
+export const WALL_JOIN_TOL = TOL_M.wallJoin;
 let seq = 0;
 
 export const JONCTION_STRATEGIES: readonly JonctionStrategyId[] = [
@@ -298,12 +300,17 @@ export function offsetPolylineOpen(poly: Vec3[], signedOffset: number): Vec3[] {
  * `poly` = sommets [v0…vn] ; si vn ≈ v0 (anneau redondant), vn est retiré.
  * Retourne n+1 points (premier répété en fin) pour itérer n segments.
  */
-export function offsetPolylineClosed(poly: Vec3[], signedOffset: number): Vec3[] {
+export function offsetPolylineClosed(
+  poly: Vec3[],
+  signedOffset: number,
+  unit: UnitId = 'm',
+): Vec3[] {
   if (poly.length < 3) return offsetPolylineOpen(poly, signedOffset);
 
   let pts = poly.map((p) => [p[0], p[1], p[2]] as Vec3);
   // Anneau avec dernier = premier
-  if (dist(pts[0]!, pts[pts.length - 1]!) <= WALL_JOIN_TOL) {
+  const closeTol = metersToDoc(TOL_M.wallJoin, unit);
+  if (dist(pts[0]!, pts[pts.length - 1]!) <= closeTol) {
     pts = pts.slice(0, -1);
   }
   const n = pts.length;
@@ -372,7 +379,11 @@ export function arcWallStrokes(
 }
 
 /** Traits d'une entité mur (rendu / preview / snap). */
-export function wallEntityStrokes(wall: WallEntity, segments = 64): WallStroke[] {
+export function wallEntityStrokes(
+  wall: WallEntity,
+  segments = 64,
+  unit: UnitId = 'm',
+): WallStroke[] {
   // Géométrie précalculée (jonctions L/T/Y, y compris polymurs linéaires)
   if (wall.strokeGeom && wall.strokeGeom.length > 0) {
     const fromGeom = wall.strokeGeom.map((g) => ({
@@ -406,7 +417,7 @@ export function wallEntityStrokes(wall: WallEntity, segments = 64): WallStroke[]
   }
 
   if (wall.path === 'poly' && wall.segments && wall.segments.length > 0) {
-    return polyWallStrokes(wall, segments);
+    return polyWallStrokes(wall, segments, unit);
   }
 
   if (wall.path === 'arc' && wall.center && wall.radius != null && wall.startAngle != null && wall.endAngle != null) {
@@ -546,13 +557,15 @@ export function polyWallEndTangent(wall: WallEntity): Vec3 | null {
 export function appendWallSegment(
   wall: WallEntity,
   seg: WallSegment,
+  unit: UnitId = 'm',
 ): WallEntity {
   const segments = [...(wall.segments ?? []), seg];
   const start = wallSegStart(segments[0]!);
   const end = wallSegEnd(segments[segments.length - 1]!);
   // Si on prolonge après une fermeture, le chemin n’est plus une simple boucle
   const stillClosed =
-    Boolean(wall.closed) && dist(start, end) <= WALL_JOIN_TOL;
+    Boolean(wall.closed) &&
+    dist(start, end) <= metersToDoc(TOL_M.wallJoin, unit);
   return {
     ...wall,
     path: 'poly',
@@ -569,7 +582,11 @@ export function appendWallSegment(
  * Segments linéaires : joints par **nœuds** (L, T, étoile) via miters multi-voisins.
  * Arcs : offset radial indépendant.
  */
-export function polyWallStrokes(wall: WallEntity, arcSamples = 64): WallStroke[] {
+export function polyWallStrokes(
+  wall: WallEntity,
+  arcSamples = 64,
+  unit: UnitId = 'm',
+): WallStroke[] {
   const segs = wall.segments;
   if (!segs || segs.length === 0 || wall.lines.length === 0) return [];
 
@@ -602,7 +619,13 @@ export function polyWallStrokes(wall: WallEntity, arcSamples = 64): WallStroke[]
   }
 
   if (linearSegs.length > 0) {
-    out.push(...strokesForCenterSegs(linearSegs, WALL_JOIN_TOL));
+    out.push(
+      ...strokesForCenterSegs(
+        linearSegs,
+        metersToDoc(TOL_M.wallJoin, unit),
+        unit,
+      ),
+    );
   }
   return out;
 }
@@ -643,12 +666,12 @@ function pickNodeStrategy(
  * Fermé géométriquement : dernier point ≈ premier (indépendant du flag
  * `closed`, qui peut rester vrai après « Continuer » puis un nouveau segment).
  */
-export function isPolyWallClosed(wall: WallEntity): boolean {
+export function isPolyWallClosed(wall: WallEntity, unit: UnitId = 'm'): boolean {
   if (!wall.segments || wall.segments.length < 2) return false;
   const a = polyWallStart(wall);
   const b = polyWallEnd(wall);
   if (!a || !b) return false;
-  return dist(a, b) <= WALL_JOIN_TOL;
+  return dist(a, b) <= metersToDoc(TOL_M.wallJoin, unit);
 }
 
 // ─── Joints par nœuds (L, T, étoile) ─────────────────────────────────────────
@@ -871,11 +894,12 @@ function resolveStarNodeStrokes(
   corner: Vec3,
   byId: Map<string, WallStroke[]>,
   strategy: JonctionStrategyId = 'first-hit',
+  unit: UnitId = 'm',
 ): void {
   if (nodeIncidents.length < 2) return;
 
-  /** Rayon de recherche autour du coin (m). */
-  const nearR = 1.5;
+  /** Rayon de recherche autour du coin (unité document). */
+  const nearR = metersToDoc(TOL_M.starNear, unit);
   const preferMaxT = strategy === 'max-t';
   const coverAlways =
     strategy === 'first-hit-cover' || strategy === 'max-t';
@@ -1017,7 +1041,7 @@ function resolveStarNodeStrokes(
       const b = nodeIncidents[j]!;
       const dot =
         a.leaveDir[0]! * b.leaveDir[0]! + a.leaveDir[1]! * b.leaveDir[1]!;
-      if (dot <= -0.95) {
+      if (dot <= ANG.antiparallelDot) {
         barSegIdx.add(a.segIdx);
         barSegIdx.add(b.segIdx);
       }
@@ -1041,7 +1065,7 @@ function resolveStarNodeStrokes(
         }
       }
     }
-    if (bestPerp <= 0.4) {
+    if (bestPerp <= ANG.yInLPerpDot) {
       yInLSegs.add(nodeIncidents[bestI]!.segIdx);
       yInLSegs.add(nodeIncidents[bestJ]!.segIdx);
     }
@@ -1321,6 +1345,7 @@ function strokesForCenterSegsById(
   tol: number,
   strategy: JonctionStrategyId = 'first-hit',
   nodeStrategyOut?: Map<string, JonctionStrategyId>,
+  unit: UnitId = 'm',
 ): Map<string, WallStroke[]> {
   const byId = new Map<string, WallStroke[]>();
   if (segsIn.length === 0) return byId;
@@ -1476,6 +1501,7 @@ function strokesForCenterSegsById(
             ordered.reversed,
             ordered.closed,
             subSegs,
+            unit,
           );
           for (const [id, strokes] of part) {
             byId.set(id, strokes);
@@ -1524,6 +1550,7 @@ function strokesForCenterSegsById(
           corner,
           byId,
           nodeStrategy,
+          unit,
         );
         if (incidents.length >= 3 && nodeStrategyOut) {
           for (const inc of incidents) {
@@ -1553,8 +1580,9 @@ function strokesForCenterSegsById(
 function strokesForCenterSegs(
   segsIn: readonly CenterSeg[],
   tol: number,
+  unit: UnitId = 'm',
 ): WallStroke[] {
-  const byId = strokesForCenterSegsById(segsIn, tol);
+  const byId = strokesForCenterSegsById(segsIn, tol, 'first-hit', undefined, unit);
   const out: WallStroke[] = [];
   for (const s of segsIn) {
     const strokes = byId.get(s.id);
@@ -1688,6 +1716,7 @@ function offsetPolylineStrokesById(
   reversed: boolean[],
   closed: boolean,
   segs: readonly CenterSeg[],
+  unit: UnitId = 'm',
 ): Map<string, WallStroke[]> {
   const byId = new Map<string, WallStroke[]>();
   if (poly.length < 2 || segOrder.length === 0) return byId;
@@ -1720,7 +1749,7 @@ function offsetPolylineStrokesById(
       const side = flip ? -1 : 1;
       const o = rawOff * side;
       const miterPoly = closed
-        ? offsetPolylineClosed(poly, o)
+        ? offsetPolylineClosed(poly, o, unit)
         : offsetPolylineOpen(poly, o);
 
       for (let c = 0; c < segOrder.length; c++) {
@@ -1870,17 +1899,21 @@ type MidTJoin = {
 function joinEndZone(
   a: readonly WallLineDef[],
   b: readonly WallLineDef[],
+  unit: UnitId = 'm',
 ): number {
   // 5–10 cm : un T à 20 cm du bout d’un mur 29 cm d’épaisseur reste un T.
+  const minZ = metersToDoc(TOL_M.joinEndMin, unit);
+  const maxZ = metersToDoc(TOL_M.joinEndMax, unit);
   const thick = Math.max(wallProfileWidth(a), wallProfileWidth(b), 0);
-  return Math.max(0.05, Math.min(0.1, thick * 0.25 || 0.05));
+  return Math.max(minZ, Math.min(maxZ, thick * 0.25 || minZ));
 }
 
 function findMidTJoins(
   segs: readonly CenterSeg[],
   tol: number,
+  unit: UnitId = 'm',
 ): MidTJoin[] {
-  const onLineTol = Math.max(tol * 3, 0.01);
+  const onLineTol = Math.max(tol * 3, metersToDoc(TOL_M.onLineFloor, unit));
   const out: MidTJoin[] = [];
   const seen = new Set<string>();
 
@@ -1899,10 +1932,14 @@ function findMidTJoins(
         if (d > onLineTol) continue;
         const barLen = dist(bar.start, bar.end);
         if (barLen < EPS) continue;
-        const endZone = joinEndZone(stem.lines, bar.lines);
+        const endZone = joinEndZone(stem.lines, bar.lines, unit);
         const along = t * barLen;
         const onSpan = along >= endZone && along <= barLen - endZone;
-        const pad = Math.max(wallProfileWidth(bar.lines), 0.3) + 0.5;
+        const pad =
+          Math.max(
+            wallProfileWidth(bar.lines),
+            metersToDoc(TOL_M.midTNearWidth, unit),
+          ) + metersToDoc(TOL_M.midTNearExtra, unit);
         // Hors segment mais clairement pas un coin L (écart > zone de bout)
         const nearMiss =
           (along < -endZone && along > -pad) ||
@@ -1947,6 +1984,7 @@ function joinStemToBarPeigne(
   stemGeomsIn?: readonly WallStrokeGeom[],
   extraBars: readonly WallEntity[] = [],
   extraBarGeomsIn: ReadonlyMap<string, WallStrokeGeom[]> = new Map(),
+  unit: UnitId = 'm',
 ): {
   stemGeoms: WallStrokeGeom[];
   barGeoms: WallStrokeGeom[];
@@ -2347,8 +2385,9 @@ function joinStemToBarPeigne(
         .filter((l) => wallLineJoinPriority(stem.lines, l) === stemStructPrio)
         .map(stemAlongE);
       if (vals.length > 0) {
-        const bMin = Math.min(...vals) - 0.001;
-        const bMax = Math.max(...vals) + 0.001;
+        const band = metersToDoc(TOL_M.openingBandPad, unit);
+        const bMin = Math.min(...vals) - band;
+        const bMax = Math.max(...vals) + band;
         if (bMax > bMin + EPS) {
           geoms = cutBarGeomsInBand(geoms, alongE, bMin, bMax, new Set([eEntry]));
         }
@@ -2357,8 +2396,9 @@ function joinStemToBarPeigne(
     if (eWeak.size > 0) {
       const vals = stem.lines.map(stemAlongE);
       if (vals.length > 0) {
-        const bMin = Math.min(...vals) - 0.001;
-        const bMax = Math.max(...vals) + 0.001;
+        const band = metersToDoc(TOL_M.openingBandPad, unit);
+        const bMin = Math.min(...vals) - band;
+        const bMax = Math.max(...vals) + band;
         if (bMax > bMin + EPS) {
           geoms = cutBarGeomsInBand(geoms, alongE, bMin, bMax, eWeak);
         }
@@ -2371,11 +2411,11 @@ function joinStemToBarPeigne(
   // l’ouverture est un peu plus large → le remnant ne touche pas. On
   // recale uniquement le bout de barre, max 4 cm, sans bouger le BIM.
   const stemHits = stemGeoms.map((g) => (which === 'start' ? g.start : g.end));
-  barGeoms = snapCutEdgesToStemHits(barGeoms, bar, stemHits);
+  barGeoms = snapCutEdgesToStemHits(barGeoms, bar, stemHits, unit);
   for (const extra of extraBarGeoms) {
     const ew = extraBars.find((w) => w.id === extra.id);
     if (!ew) continue;
-    extra.geoms = snapCutEdgesToStemHits(extra.geoms, ew, stemHits);
+    extra.geoms = snapCutEdgesToStemHits(extra.geoms, ew, stemHits, unit);
   }
 
   return { stemGeoms, barGeoms, extraBarGeoms };
@@ -2389,9 +2429,11 @@ function snapCutEdgesToStemHits(
   geoms: readonly WallStrokeGeom[],
   wall: WallEntity,
   stemHits: readonly Vec3[],
+  unit: UnitId = 'm',
 ): WallStrokeGeom[] {
-  const maxSnap = 0.04;
-  const onLine = 0.003;
+  const maxSnap = metersToDoc(TOL_M.combEndSnap, unit);
+  const onLine = metersToDoc(TOL_M.onStroke, unit);
+  const minMove = metersToDoc(TOL_M.combMinMove, unit);
   const dir = normalize(sub(wall.end, wall.start));
   if (xyLen(dir) < EPS) {
     return geoms.map((g) => ({
@@ -2420,7 +2462,7 @@ function snapCutEdgesToStemHits(
       for (const h of stemHits) {
         if (lineDist(h, g.start, g.end) > onLine) continue;
         const d = Math.abs(along(h) - a);
-        if (d < 5e-4 || d > maxSnap) continue;
+        if (d < minMove || d > maxSnap) continue;
         if (d < bestD) {
           bestD = d;
           best = h;
@@ -2540,9 +2582,11 @@ function centerSegRootId(sid: string): string {
  */
 export function recomputeLinearWallJoints(
   walls: readonly WallEntity[],
-  tol = WALL_JOIN_TOL,
+  tol: number = WALL_JOIN_TOL,
   strategy: JonctionStrategyId = 'first-hit',
+  unit: UnitId = 'm',
 ): WallEntity[] {
+  const joinTol = tol;
   const centerSegs: CenterSeg[] = [];
 
   for (const w of walls) {
@@ -2575,7 +2619,7 @@ export function recomputeLinearWallJoints(
   const nodeStrategyByRoot = new Map<string, JonctionStrategyId>();
   if (centerSegs.length > 0) {
     // Snap des pieds T mid sur l’axe de la barre (sans scinder la barre)
-    const midJoins = findMidTJoins(centerSegs, tol);
+    const midJoins = findMidTJoins(centerSegs, joinTol, unit);
     // Copie mutable des axes (snap pied → barre) pour le peigne
     const snappedWalls = new Map<string, WallEntity>();
     for (const w of walls) {
@@ -2609,9 +2653,10 @@ export function recomputeLinearWallJoints(
     // Résolveur L / coins (pas de demis mid-T — barre reste entière)
     const strokesById = strokesForCenterSegsById(
       centerSegs,
-      tol,
+      joinTol,
       strategy,
       nodeStrategyByRoot,
+      unit,
     );
 
     // Regrouper par mur racine (polymur `id#i` → `id`)
@@ -2662,18 +2707,22 @@ export function recomputeLinearWallJoints(
       const extraBars = walls.filter((w) => {
         if (w.id === stem.id || w.id === bar.id || w.path !== 'line') return false;
         const sharesEnd =
-          dist(w.start, bar.start) <= WALL_JOIN_TOL ||
-          dist(w.start, bar.end) <= WALL_JOIN_TOL ||
-          dist(w.end, bar.start) <= WALL_JOIN_TOL ||
-          dist(w.end, bar.end) <= WALL_JOIN_TOL;
+          dist(w.start, bar.start) <= joinTol ||
+          dist(w.start, bar.end) <= joinTol ||
+          dist(w.end, bar.start) <= joinTol ||
+          dist(w.end, bar.end) <= joinTol;
         if (!sharesEnd) return false;
         const stemNear = mid.which === 'start' ? stem.start : stem.end;
         const wNear =
           dist(w.start, stemNear) < dist(w.end, stemNear) ? w.start : w.end;
         const nearPad =
-          Math.max(wallProfileWidth(bar.lines), wallProfileWidth(stem.lines), 0.5) *
+          Math.max(
+            wallProfileWidth(bar.lines),
+            wallProfileWidth(stem.lines),
+            metersToDoc(TOL_M.extraBarMinWidth, unit),
+          ) *
             3 +
-          1;
+          metersToDoc(TOL_M.extraBarPad, unit);
         return dist(wNear, stemNear) <= nearPad;
       });
       const extraBarGeomsIn = new Map<string, WallStrokeGeom[]>();
@@ -2688,6 +2737,7 @@ export function recomputeLinearWallJoints(
         stemGeomsIn,
         extraBars,
         extraBarGeomsIn,
+        unit,
       );
       geomById.set(mid.stemId, stemGeoms);
       geomById.set(mid.barId, barGeoms);
@@ -2749,12 +2799,14 @@ function simpleStrokeGeom(w: WallEntity): WallStrokeGeom[] {
 
 export function applyWallJointsToEntities(
   entities: readonly Entity[],
-  tol = WALL_JOIN_TOL,
+  tol?: number,
   strategy: JonctionStrategyId = 'first-hit',
+  unit: UnitId = 'm',
 ): Entity[] {
+  const joinTol = tol ?? metersToDoc(TOL_M.wallJoin, unit);
   const walls = entities.filter((e): e is WallEntity => e.kind === 'wall');
   if (walls.length === 0) return entities.map((e) => ({ ...e }));
-  const joined = recomputeLinearWallJoints(walls, tol, strategy);
+  const joined = recomputeLinearWallJoints(walls, joinTol, strategy, unit);
   const map = new Map(joined.map((w) => [w.id, w]));
   return entities.map((e) => (e.kind === 'wall' && map.has(e.id) ? map.get(e.id)! : e));
 }
@@ -3051,7 +3103,7 @@ export function applyJoinWallsToEntities(
   entities: readonly Entity[],
   stemId: string,
   targetId: string,
-  opts?: { which?: 'start' | 'end'; clickOnStem?: Vec3 },
+  opts?: { which?: 'start' | 'end'; clickOnStem?: Vec3; unit?: UnitId },
 ): { entities: Entity[]; result: JoinWallsResult } {
   const stem = entities.find(
     (e): e is WallEntity => e.kind === 'wall' && e.id === stemId,
@@ -3075,7 +3127,12 @@ export function applyJoinWallsToEntities(
     return e;
   });
   return {
-    entities: applyWallJointsToEntities(next, WALL_JOIN_TOL, 'first-hit'),
+    entities: applyWallJointsToEntities(
+      next,
+      undefined,
+      'first-hit',
+      opts?.unit ?? 'm',
+    ),
     result,
   };
 }
@@ -3159,6 +3216,7 @@ export function applyCornerWallsToEntities(
   clickA: Vec3,
   idB: string,
   clickB: Vec3,
+  unit: UnitId = 'm',
 ): { entities: Entity[]; result: CornerWallsResult } {
   const a = entities.find((e): e is WallEntity => e.kind === 'wall' && e.id === idA);
   const b = entities.find((e): e is WallEntity => e.kind === 'wall' && e.id === idB);
@@ -3178,16 +3236,16 @@ export function applyCornerWallsToEntities(
     return e;
   });
   return {
-    entities: applyWallJointsToEntities(next, WALL_JOIN_TOL, 'first-hit'),
+    entities: applyWallJointsToEntities(next, undefined, 'first-hit', unit),
     result,
   };
 }
 
 /**
- * Tolérance de fusion des extrémités dans /jonction (65 cm).
+ * Tolérance de fusion des extrémités dans /jonction (65 cm), en mètres.
  * Plus large que WALL_JOIN_TOL (5 mm, coïncidence après snap).
  */
-export const WALL_REJOIN_SNAP_TOL = 0.65;
+export const WALL_REJOIN_SNAP_TOL = TOL_M.wallRejoinSnap;
 
 /** Clé d’une extrémité : start/end (mur simple) ou seg:i:start|end (polymur). */
 type EndRef = {
@@ -3288,7 +3346,7 @@ function resolveClusterSnap(
     if (ax) valid.push({ g, ax });
   }
 
-  const maxReach = Math.max(snapTol * 4, 1.0);
+  const maxReach = Math.max(snapTol * 4, snapTol > 0 ? snapTol / 0.65 : 1);
   let P: Vec3 = avg;
 
   if (valid.length === 2) {
@@ -3317,7 +3375,7 @@ function resolveClusterSnap(
         const da = axisDir(valid[i]!.ax);
         const db = axisDir(valid[j]!.ax);
         const dot = da[0]! * db[0]! + da[1]! * db[1]!;
-        if (dot <= -0.95 && axesCollinear(valid[i]!.ax, valid[j]!.ax, snapTol)) {
+        if (dot <= ANG.antiparallelDot && axesCollinear(valid[i]!.ax, valid[j]!.ax, snapTol)) {
           barI = i;
           barJ = j;
           break;
@@ -3385,6 +3443,7 @@ function resolveClusterSnap(
 function stemIdsToKeepOutOfExistingL(
   group: readonly EndRef[],
   wallById: Map<string, WallEntity>,
+  unit: UnitId = 'm',
 ): Set<string> {
   const out = new Set<string>();
   const byWall = new Map<string, EndRef>();
@@ -3400,7 +3459,7 @@ function stemIdsToKeepOutOfExistingL(
     for (let j = i + 1; j < unique.length; j++) {
       const a = unique[i]!;
       const b = unique[j]!;
-      if (dist(a.point, b.point) > 0.02) continue;
+      if (dist(a.point, b.point) > metersToDoc(TOL_M.existingLGap, unit)) continue;
       const axA = endRefAxis(a, wallById);
       const axB = endRefAxis(b, wallById);
       if (!axA || !axB) continue;
@@ -3432,16 +3491,20 @@ function stemIdsToKeepOutOfExistingL(
       const hit = lineIntersect2d(sax.far, sdir, w.start, sub(w.end, w.start));
       if (!hit) continue;
       const t = paramT(hit);
-      if (t < tNear * 0.3 - 0.05) continue;
+      if (t < tNear * 0.3 - metersToDoc(TOL_M.joinEndMin, unit)) continue;
       const slen = dist(w.start, w.end);
       if (slen < EPS) continue;
       const pr = projectOnSegmentParam(w.start, w.end, hit);
       const along = pr.t * slen;
-      const pad = Math.max(wallProfileWidth(w.lines), 0.3) + 0.5;
+      const pad =
+        Math.max(
+          wallProfileWidth(w.lines),
+          metersToDoc(TOL_M.midTNearWidth, unit),
+        ) + metersToDoc(TOL_M.midTNearExtra, unit);
       if (along < -pad || along > slen + pad) continue;
       if (t < bestT - 1e-9) {
         bestT = t;
-        bestAtCorner = dist(hit, corner) <= 0.08;
+        bestAtCorner = dist(hit, corner) <= metersToDoc(TOL_M.wallRejoinNodeCap, unit);
       }
     }
     if (Number.isFinite(bestT) && bestT < Infinity && !bestAtCorner) {
@@ -3576,14 +3639,17 @@ function endTouchesAnother(
   wallId: string,
   pt: Vec3,
   walls: readonly WallEntity[],
+  unit: UnitId = 'm',
 ): boolean {
+  const joinTol = metersToDoc(TOL_M.wallJoin, unit);
+  const onSeg = metersToDoc(TOL_M.touchOnSegment, unit);
   for (const w of walls) {
     if (w.id === wallId || w.path !== 'line') continue;
-    if (dist(pt, w.start) <= WALL_JOIN_TOL || dist(pt, w.end) <= WALL_JOIN_TOL) {
+    if (dist(pt, w.start) <= joinTol || dist(pt, w.end) <= joinTol) {
       return true;
     }
     const { t, dist: d } = projectOnSegmentParam(w.start, w.end, pt);
-    if (d <= 0.02 && t > 0.001 && t < 0.999) return true;
+    if (d <= onSeg && t > 0.001 && t < 0.999) return true;
   }
   return false;
 }
@@ -3596,6 +3662,7 @@ function extendDanglingWallsInBox(
   entities: readonly Entity[],
   box: { minX: number; minY: number; maxX: number; maxY: number },
   skipStemIds?: ReadonlySet<string>,
+  unit: UnitId = 'm',
 ): { entities: Entity[]; extended: number } {
   const walls = entities.filter(
     (e): e is WallEntity => e.kind === 'wall' && e.path === 'line',
@@ -3619,7 +3686,7 @@ function extendDanglingWallsInBox(
       stem.start[0] <= box.maxX &&
       stem.start[1] >= box.minY &&
       stem.start[1] <= box.maxY &&
-      !endTouchesAnother(stem.id, stem.start, walls)
+      !endTouchesAnother(stem.id, stem.start, walls, unit)
     ) {
       options.push('start');
     }
@@ -3628,7 +3695,7 @@ function extendDanglingWallsInBox(
       stem.end[0] <= box.maxX &&
       stem.end[1] >= box.minY &&
       stem.end[1] <= box.maxY &&
-      !endTouchesAnother(stem.id, stem.end, walls)
+      !endTouchesAnother(stem.id, stem.end, walls, unit)
     ) {
       options.push('end');
     }
@@ -3710,9 +3777,13 @@ function extendDanglingWallsInBox(
 export function snapAndRejoinWallsInBox(
   entities: readonly Entity[],
   box: { minX: number; minY: number; maxX: number; maxY: number },
-  snapTol = WALL_REJOIN_SNAP_TOL,
+  snapTol?: number,
   strategy: JonctionStrategyId = 'first-hit',
+  unit: UnitId = 'm',
 ): JonctionResult {
+  const tolSnap = snapTol ?? metersToDoc(TOL_M.wallRejoinSnap, unit);
+  const baseJoin = metersToDoc(TOL_M.wallJoin, unit);
+  const nodeCap = metersToDoc(TOL_M.wallRejoinNodeCap, unit);
   const inBox = (p: Vec3) =>
     p[0] >= box.minX &&
     p[0] <= box.maxX &&
@@ -3732,7 +3803,7 @@ export function snapAndRejoinWallsInBox(
   }
 
   if (ends.length < 2) {
-    const joined = applyWallJointsToEntities(entities, WALL_JOIN_TOL, strategy);
+    const joined = applyWallJointsToEntities(entities, baseJoin, strategy, unit);
     return {
       entities: joined,
       snappedEntities: entities.map((e) => ({ ...e })),
@@ -3751,14 +3822,14 @@ export function snapAndRejoinWallsInBox(
     for (let j = i + 1; j < ends.length; j++) {
       if (ends[i]!.wallId === ends[j]!.wallId) continue;
       const d = dist(ends[i]!.point, ends[j]!.point);
-      if (d <= WALL_JOIN_TOL) continue;
+      if (d <= baseJoin) continue;
       if (nearestEndDist == null || d < nearestEndDist) nearestEndDist = d;
     }
   }
 
   const { rep } = clusterPoints(
     ends.map((e) => e.point),
-    snapTol,
+    tolSnap,
   );
   const clusters = new Map<number, EndRef[]>();
   for (let i = 0; i < ends.length; i++) {
@@ -3776,7 +3847,7 @@ export function snapAndRejoinWallsInBox(
   const wallsTouched = new Set<string>();
 
   for (const rawGroup of clusters.values()) {
-    const drop = stemIdsToKeepOutOfExistingL(rawGroup, wallById);
+    const drop = stemIdsToKeepOutOfExistingL(rawGroup, wallById, unit);
     const group = drop.size
       ? rawGroup.filter((g) => !drop.has(g.wallId))
       : rawGroup;
@@ -3784,7 +3855,7 @@ export function snapAndRejoinWallsInBox(
     multiClusters += 1;
     for (const g of group) wallsTouched.add(g.wallId);
 
-    const { corner, perEnd } = resolveClusterSnap(group, wallById, snapTol);
+    const { corner, perEnd } = resolveClusterSnap(group, wallById, tolSnap);
     for (const [k, p] of perEnd) snapAt.set(k, p);
     const pts = [...perEnd.values()];
     for (let i = 0; i < pts.length; i++) {
@@ -3799,9 +3870,9 @@ export function snapAndRejoinWallsInBox(
   }
 
   if (snapAt.size === 0) {
-    const ext = extendDanglingWallsInBox(entities, box);
+    const ext = extendDanglingWallsInBox(entities, box, undefined, unit);
     if (ext.extended === 0) {
-      const joined = applyWallJointsToEntities(entities, WALL_JOIN_TOL, strategy);
+      const joined = applyWallJointsToEntities(entities, baseJoin, strategy, unit);
       return {
         entities: joined,
         snappedEntities: entities.map((e) => ({ ...e })),
@@ -3814,7 +3885,7 @@ export function snapAndRejoinWallsInBox(
       };
     }
     return {
-      entities: applyWallJointsToEntities(ext.entities, WALL_JOIN_TOL, strategy),
+      entities: applyWallJointsToEntities(ext.entities, baseJoin, strategy, unit),
       snappedEntities: ext.entities,
       wallsTouched: ext.extended,
       clusters: 0,
@@ -3934,7 +4005,7 @@ export function snapAndRejoinWallsInBox(
         const b = segments[i + 1]!;
         if (a.type === 'line' && b.type === 'line') {
           // Si l’un a été snappé, l’autre suit
-          if (dist(a.end, b.start) > 1e-9 && dist(a.end, b.start) < snapTol * 2) {
+          if (dist(a.end, b.start) > 1e-9 && dist(a.end, b.start) < tolSnap * 2) {
             const mid: Vec3 = [
               (a.end[0] + b.start[0]) / 2,
               (a.end[1] + b.start[1]) / 2,
@@ -3977,7 +4048,7 @@ export function snapAndRejoinWallsInBox(
     return e;
   });
 
-  const ext = extendDanglingWallsInBox(next, box, wallsTouched);
+  const ext = extendDanglingWallsInBox(next, box, wallsTouched, unit);
   for (const e of ext.entities) {
     if (e.kind !== 'wall') continue;
     const before = next.find((x) => x.id === e.id);
@@ -3993,9 +4064,9 @@ export function snapAndRejoinWallsInBox(
   // Après snap les bouts d’un même nœud peuvent rester à quelques cm
   // (chacun sur son axe). On ne dépasse pas 8 cm : au-delà on avalerait
   // des murs voisins (T non joints, autre bras du cadre) et on casserait le L.
-  const joinTol = Math.max(WALL_JOIN_TOL, Math.min(maxSnapGap + 1e-6, 0.08));
+  const joinTol = Math.max(baseJoin, Math.min(maxSnapGap + 1e-6, nodeCap));
   return {
-    entities: applyWallJointsToEntities(after, joinTol, strategy),
+    entities: applyWallJointsToEntities(after, joinTol, strategy, unit),
     snappedEntities: after,
     wallsTouched: wallsTouched.size,
     clusters: multiClusters,

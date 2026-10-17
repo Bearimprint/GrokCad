@@ -7,6 +7,7 @@ import { sampleArc, sampleCircle } from './drawing';
 import { objectInstanceStrokes } from './objectInstance';
 import { polylineStrokes } from './polyline';
 import type { Entity, Vec3, WallEntity } from './types';
+import { clipWallStrokes, collectWallOpenings } from './insertOpening';
 import { wallEntityStrokes } from './walls';
 
 export type Aabb2 = { minX: number; minY: number; maxX: number; maxY: number };
@@ -203,8 +204,16 @@ export function entitiesInAabb(
   opts?: { includeHelpers?: boolean },
 ): Entity[] {
   const includeHelpers = opts?.includeHelpers ?? false;
+  const openings = collectWallOpenings(entities);
   return entities.filter((e) => {
     if (e.kind === 'helper' && !includeHelpers) return false;
+    if (e.kind === 'wall') {
+      const strokes = clipWallStrokes(e, wallEntityStrokes(e, 32), openings);
+      for (const s of strokes) {
+        if (polylineHitsAabb(s.points, box)) return true;
+      }
+      return false;
+    }
     return entityHitsAabb(e, box);
   });
 }

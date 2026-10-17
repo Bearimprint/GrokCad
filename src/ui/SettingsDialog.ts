@@ -28,6 +28,7 @@ export class SettingsDialog {
   private gridOffDisablesSnapInput: HTMLInputElement;
   private stylesList: HTMLElement;
   private textboxPadInput: HTMLInputElement;
+  private insertRailSideSelect: HTMLSelectElement;
   private onUnitsChange: UnitsChangeHandler | null = null;
 
   constructor(
@@ -66,6 +67,13 @@ export class SettingsDialog {
             <label class="settings-row">
               <span>Grid Off désactive automatiquement le snap de la grille</span>
               <input type="checkbox" id="set-grid-off-disables-snap" />
+            </label>
+            <label class="settings-row">
+              <span>Emplacement de la liste des couches spéciales</span>
+              <select id="set-insert-rail-side">
+                <option value="left">à Gauche du Canvas</option>
+                <option value="right">à Droite du Canvas</option>
+              </select>
             </label>
           </section>
           <section class="settings-section">
@@ -119,6 +127,9 @@ export class SettingsDialog {
     )!;
     this.stylesList = this.overlay.querySelector('#set-styles-list')!;
     this.textboxPadInput = this.overlay.querySelector('#set-textbox-pad')!;
+    this.insertRailSideSelect = this.overlay.querySelector(
+      '#set-insert-rail-side',
+    )!;
 
     for (const id of UNIT_IDS) {
       const opt = document.createElement('option');
@@ -169,6 +180,11 @@ export class SettingsDialog {
 
     this.gridOffDisablesSnapInput.addEventListener('change', () => {
       this.app.setGridOffDisablesSnap(this.gridOffDisablesSnapInput.checked);
+    });
+
+    this.insertRailSideSelect.addEventListener('change', () => {
+      const v = this.insertRailSideSelect.value;
+      if (v === 'left' || v === 'right') this.app.setInsertLayerRailSide(v);
     });
 
     this.textboxPadInput.addEventListener('change', () => {
@@ -234,6 +250,7 @@ export class SettingsDialog {
     this.textboxPadInput.value = String(
       this.textPrefs?.textboxPadding ?? 0.03,
     );
+    this.insertRailSideSelect.value = this.app.insertLayerRailSide;
   }
 
   private renderStyles(): void {

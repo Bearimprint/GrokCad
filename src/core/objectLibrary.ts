@@ -19,7 +19,20 @@ export interface LibraryFileInfo {
   tab: string;
 }
 
-const DEFAULT_TABS = ['sanitaire', 'electrique', 'salon', 'chambre'];
+const DEFAULT_TABS = [
+  'sanitaire',
+  'electrique',
+  'salon',
+  'chambre',
+  'insertions',
+];
+
+/** tab peut être imbriqué : `insertions/doors`. */
+export function libraryApiUrl(tab: string, file?: string): string {
+  const segs = tab.split('/').filter(Boolean);
+  if (file) segs.push(file);
+  return `/api/library/${segs.map(encodeURIComponent).join('/')}`;
+}
 
 export async function listLibraryTabs(): Promise<string[]> {
   try {
@@ -34,7 +47,7 @@ export async function listLibraryTabs(): Promise<string[]> {
 
 export async function listLibraryFiles(tab: string): Promise<LibraryFileInfo[]> {
   try {
-    const r = await fetch(`/api/library/${encodeURIComponent(tab)}`);
+    const r = await fetch(libraryApiUrl(tab));
     if (!r.ok) throw new Error(String(r.status));
     const data = (await r.json()) as { files: { name: string; file: string }[] };
     return (data.files ?? []).map((f) => ({ ...f, tab }));
@@ -48,9 +61,7 @@ export async function loadLibraryObject(
   name: string,
 ): Promise<GkdDocument | null> {
   try {
-    const r = await fetch(
-      `/api/library/${encodeURIComponent(tab)}/${encodeURIComponent(name)}`,
-    );
+    const r = await fetch(libraryApiUrl(tab, name));
     if (!r.ok) return null;
     return parseGkd(await r.text());
   } catch {
@@ -64,14 +75,11 @@ export async function saveLibraryObject(
   doc: GkdDocument,
 ): Promise<{ ok: boolean; path?: string; error?: string }> {
   try {
-    const r = await fetch(
-      `/api/library/${encodeURIComponent(tab)}/${encodeURIComponent(name)}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: serializeGkd(doc),
-      },
-    );
+    const r = await fetch(libraryApiUrl(tab, name), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: serializeGkd(doc),
+    });
     const data = (await r.json()) as { ok?: boolean; path?: string; error?: string };
     if (!r.ok) return { ok: false, error: data.error ?? r.statusText };
     return { ok: true, path: data.path };
@@ -82,7 +90,7 @@ export async function saveLibraryObject(
 
 export async function createLibraryTab(tab: string): Promise<boolean> {
   try {
-    const r = await fetch(`/api/library/${encodeURIComponent(tab)}`, {
+    const r = await fetch(libraryApiUrl(tab), {
       method: 'POST',
     });
     return r.ok;
@@ -96,10 +104,7 @@ export async function deleteLibraryObject(
   name: string,
 ): Promise<boolean> {
   try {
-    const r = await fetch(
-      `/api/library/${encodeURIComponent(tab)}/${encodeURIComponent(name)}`,
-      { method: 'DELETE' },
-    );
+    const r = await fetch(libraryApiUrl(tab, name), { method: 'DELETE' });
     return r.ok;
   } catch {
     return false;

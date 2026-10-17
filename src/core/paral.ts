@@ -21,7 +21,8 @@ import type {
   Vec3,
   WallEntity,
 } from './types';
-import { leftNormalFromDir, wallEntityStrokes } from './walls';
+import { clipWallStrokes, collectWallOpenings } from './insertOpening';
+import { leftNormalFromDir, wallEntityStrokes, type WallStroke } from './walls';
 
 const EPS = 1e-9;
 
@@ -124,6 +125,7 @@ export function findNearestDesignatable(
 ): DesignationHit | null {
   if (maxDist <= 0) return null;
   let best: DesignationHit | null = null;
+  const openings = collectWallOpenings(entities);
 
   const consider = (entity: Designatable, point: Vec3, d: number) => {
     if (d > maxDist) return;
@@ -144,7 +146,11 @@ export function findNearestDesignatable(
       const near = closestOnInfinite(e.origin, e.direction, click);
       consider(e, near.point, near.dist);
     } else if (e.kind === 'wall') {
-      const near = closestOnWall(e, click);
+      const near = closestOnWall(
+        e,
+        click,
+        clipWallStrokes(e, wallEntityStrokes(e, 32), openings),
+      );
       if (near) consider(e, near.point, near.dist);
     }
   }
@@ -368,8 +374,8 @@ function closestOnCircle(
 function closestOnWall(
   wall: WallEntity,
   click: Vec3,
+  strokes: readonly WallStroke[] = wallEntityStrokes(wall, 32),
 ): { point: Vec3; dist: number; strokeIndex: number } | null {
-  const strokes = wallEntityStrokes(wall, 32);
   let best: { point: Vec3; dist: number; strokeIndex: number } | null = null;
   for (let i = 0; i < strokes.length; i++) {
     const s = strokes[i]!;

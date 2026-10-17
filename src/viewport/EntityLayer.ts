@@ -31,12 +31,25 @@ import type {
   Vec3,
   WallEntity,
 } from '../core/types';
+import type { UnitId } from '../core/units';
+import { DEFAULT_UNIT } from '../core/units';
 import { wallEntityStrokes, type WallStroke } from '../core/walls';
+import {
+  clipWallStrokes,
+  collectWallOpenings,
+  type OpeningInterval,
+} from '../core/insertOpening';
+import {
+  ANCHOR_LAYER,
+  entityDrawLayer,
+  renderOrderForDrawLayer,
+} from '../core/drawLayers';
 
 interface SolidPiece {
   points: Vec3[];
   color: string;
   lineWidth: number;
+  renderOrder?: number;
 }
 
 /**
@@ -107,6 +120,8 @@ export class EntityLayer {
   /** Points : taille écran fixe (px), indépendante du zoom. */
   private pointObjects = new Map<string, THREE.Points>();
   private pointMats = new Map<string, THREE.PointsMaterial>();
+  /** Ancres couche −9 : gros rond orange (comme le snap). */
+  private anchorMeshes = new Map<string, THREE.Mesh>();
   private resolution = new THREE.Vector2(1, 1);
   private previews: Line2[] = [];
   private previewMats: LineMaterial[] = [];
@@ -117,6 +132,10 @@ export class EntityLayer {
   private selectRect: Line2 | null = null;
   private selectRectMat: LineMaterial | null = null;
   private lastEntities: readonly Entity[] = [];
+  /** Ouverture en cours de pose (pas encore dans le document). */
+  private openingPreview: OpeningInterval[] = [];
+  private wallOpenings: OpeningInterval[] = [];
+  private docUnit: UnitId = DEFAULT_UNIT;
 
   /** Cyan = sélection (/select). */
   static readonly SELECT_COLOR = '#4fc3f7';
@@ -125,6 +144,11 @@ export class EntityLayer {
 
   constructor() {
     this.group.name = 'entity-layer';
+  }
+
+  /** Unité du document, pour les tolérances de traits de mur sans strokeGeom. */
+  setDocUnit(unit: UnitId): void {
+    this.docUnit = unit;
   }
 
   setResolution(width: number, height: number): void {
@@ -140,26 +164,37 @@ export class EntityLayer {
     }
   }
 
+  /** Aperçu du trou pendant `/iw` (étape souris). null = aucun. */
+  setOpeningPreview(openings: readonly OpeningInterval[] | null): void {
+    this.openingPreview = openings ? openings.slice() : [];
+    if (this.lastEntities.length) this.setEntities(this.lastEntities);
+  }
+
   setEntities(entities: readonly Entity[]): void {
     this.lastEntities = entities;
+    this.wallOpenings = collectWallOpenings(entities, this.openingPreview);
     // Précharge les motifs /fill (re-render via hatchCache.onChange dans main)
     preloadHatchFromEntities(entities);
-    const draw = entities.filter(
-      (e): e is DrawEntity =>
-        e.kind === 'line' ||
-        e.kind === 'arc' ||
-        e.kind === 'circle' ||
-        e.kind === 'polyline' ||
-        e.kind === 'wall' ||
-        e.kind === 'object' ||
-        e.kind === 'text' ||
-        e.kind === 'dimension' ||
-        e.kind === 'point',
-    );
+    const draw = entities
+      .filter(
+        (e): e is DrawEntity =>
+          e.kind === 'line' ||
+          e.kind === 'arc' ||
+          e.kind === 'circle' ||
+          e.kind === 'polyline' ||
+          e.kind === 'wall' ||
+          e.kind === 'object' ||
+          e.kind === 'text' ||
+          e.kind === 'dimension' ||
+          e.kind === 'point',
+      )
+      .slice()
+      .sort((a, b) => entityDrawLayer(a) - entityDrawLayer(b));
 
     const wanted = new Set<string>();
     const wantedText = new Set<string>();
     const wantedPoints = new Set<string>();
+    const wantedAnchors = new Set<string>();
     const wantedAux = new Set<string>();
     for (const e of draw) {
       if (e.kind === 'text') {
@@ -198,7 +233,8 @@ export class EntityLayer {
           }
         }
       } else if (e.kind === 'point') {
-        wantedPoints.add(e.id);
+        if (entityDrawLayer(e) === ANCHOR_LAYER) wantedAnchors.add(e.id);
+        else wantedPoints.add(e.id);
       } else {
         const n = this.countPieces(e);
         for (let i = 0; i < n; i++) wanted.add(strokeId(e.id, i));
@@ -216,6 +252,9 @@ export class EntityLayer {
     for (const id of [...this.pointObjects.keys()]) {
       if (!wantedPoints.has(id)) this.removePoint(id);
     }
+    for (const id of [...this.anchorMeshes.keys()]) {
+      if (!wantedAnchors.has(id)) this.removeAnchor(id);
+    }
     for (const id of [...this.auxStrokes.keys()]) {
       if (!wantedAux.has(id)) this.removeAux(id);
     }
@@ -232,7 +271,8 @@ export class EntityLayer {
       } else if (e.kind === 'dimension') {
         this.upsertDimension(e);
       } else if (e.kind === 'point') {
-        this.upsertPoint(e);
+        if (entityDrawLayer(e) === ANCHOR_LAYER) this.upsertAnchor(e);
+        else this.upsertPoint(e);
       } else {
         this.upsertSimple(e);
       }
@@ -434,6 +474,7 @@ export class EntityLayer {
     for (const id of [...this.objects.keys()]) this.removeObject(id);
     for (const id of [...this.textMeshes.keys()]) this.removeText(id);
     for (const id of [...this.pointObjects.keys()]) this.removePoint(id);
+    for (const id of [...this.anchorMeshes.keys()]) this.removeAnchor(id);
     for (const p of this.previews) {
       this.group.remove(p);
       p.geometry.dispose();
@@ -502,13 +543,17 @@ export class EntityLayer {
     this.removeObject(entityId);
     for (let i = 0; i < pieces.length; i++) {
       const s = pieces[i]!;
-      this.upsertStroke(strokeId(entityId, i), {
-        points: s.points,
-        color: s.color,
-        lineWidth: s.lineWidth,
-        lineStyle: 'plein',
-        offset: 0,
-      });
+      this.upsertStroke(
+        strokeId(entityId, i),
+        {
+          points: s.points,
+          color: s.color,
+          lineWidth: s.lineWidth,
+          lineStyle: 'plein',
+          offset: 0,
+        },
+        s.renderOrder,
+      );
     }
     this.pruneStrokeIds(entityId, pieces.length);
   }
@@ -536,7 +581,8 @@ export class EntityLayer {
         color: hl.color,
         size: sizePx,
         sizeAttenuation: false,
-        depthTest: true,
+        depthTest: false,
+        depthWrite: false,
         transparent: true,
         opacity: 1,
       });
@@ -550,7 +596,7 @@ export class EntityLayer {
       );
       pts = new THREE.Points(geo, mat);
       pts.frustumCulled = false;
-      pts.renderOrder = 8;
+      pts.renderOrder = renderOrderForDrawLayer(e.drawLayer);
       pts.userData.entityId = e.id;
       this.pointObjects.set(e.id, pts);
       this.pointMats.set(e.id, mat);
@@ -586,6 +632,7 @@ export class EntityLayer {
     e: Exclude<DrawEntity, TextEntity | PointEntity | DimensionEntity>,
   ): SolidPiece[] {
     const out: SolidPiece[] = [];
+    const order = renderOrderForDrawLayer(e.drawLayer);
     const add = (
       points: Vec3[],
       color: string,
@@ -593,15 +640,21 @@ export class EntityLayer {
       lineStyle: LineStyleId | string | undefined,
     ) => {
       const hl = this.highlightStyle(e.id, color, lineWidth);
-      out.push(...expandStroke(points, hl.color, hl.lineWidth, lineStyle));
+      for (const p of expandStroke(points, hl.color, hl.lineWidth, lineStyle)) {
+        out.push({ ...p, renderOrder: order });
+      }
     };
 
     if (e.kind === 'wall') {
-      for (const s of wallEntityStrokes(e)) {
+      for (const s of clipWallStrokes(
+        e,
+        wallEntityStrokes(e, 64, this.docUnit),
+        this.wallOpenings,
+      )) {
         add(s.points, s.color, s.lineWidth, s.lineStyle);
       }
     } else if (e.kind === 'object') {
-      for (const s of objectInstanceStrokes(e)) {
+      for (const s of objectInstanceStrokes(e, undefined, this.lastEntities)) {
         add(s.points, s.color, s.lineWidth, s.lineStyle);
       }
     } else if (e.kind === 'polyline') {
@@ -646,12 +699,13 @@ export class EntityLayer {
       const mat = new THREE.MeshBasicMaterial({
         map: built.tex,
         transparent: true,
-        depthTest: true,
+        depthTest: false,
+        depthWrite: false,
         side: THREE.DoubleSide,
       });
       mesh = new THREE.Mesh(geo, mat);
       mesh.frustumCulled = false;
-      mesh.renderOrder = 5;
+      mesh.renderOrder = renderOrderForDrawLayer(e.drawLayer);
       mesh.userData.entityId = e.id;
       this.textMeshes.set(e.id, mesh);
       this.group.add(mesh);
@@ -681,7 +735,8 @@ export class EntityLayer {
     const mat = new THREE.MeshBasicMaterial({
       map: built.tex,
       transparent: true,
-      depthTest: true,
+      depthTest: false,
+      depthWrite: false,
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geo, mat);
@@ -872,11 +927,15 @@ export class EntityLayer {
         s.lineStyle,
       );
       for (const p of pieces) {
-        this.upsertStroke(strokeId(e.id, si), {
-          points: p.points,
-          color: p.color,
-          lineWidth: p.lineWidth,
-        });
+        this.upsertStroke(
+          strokeId(e.id, si),
+          {
+            points: p.points,
+            color: p.color,
+            lineWidth: p.lineWidth,
+          },
+          renderOrderForDrawLayer(e.drawLayer),
+        );
         si += 1;
       }
     }
@@ -963,6 +1022,7 @@ export class EntityLayer {
   private upsertStroke(
     id: string,
     s: WallStroke | (PreviewStroke & { offset?: number }),
+    renderOrder?: number,
   ): void {
     const pts = s.points;
     if (pts.length < 2) {
@@ -979,6 +1039,8 @@ export class EntityLayer {
         linewidth: 1,
         dashed: false,
         worldUnits: false,
+        depthTest: false,
+        depthWrite: false,
       });
       mat.resolution.copy(this.resolution);
       const geo = new LineGeometry();
@@ -990,12 +1052,45 @@ export class EntityLayer {
       this.group.add(line);
     }
 
+    line.renderOrder = renderOrder ?? line.renderOrder;
     // Motifs complexes déjà tessellés → toujours trait plein côté GPU
     mat.color.set(s.color ?? '#888888');
     mat.linewidth = Math.max(1, s.lineWidth ?? 1);
     mat.dashed = false;
     mat.needsUpdate = true;
     setLinePoints(line, pts);
+  }
+
+  private upsertAnchor(e: PointEntity): void {
+    const hl = this.highlightStyle(e.id, '#ffcc66', 3);
+    let mesh = this.anchorMeshes.get(e.id);
+    if (!mesh) {
+      const geo = new THREE.CircleGeometry(0.08, 24);
+      const mat = new THREE.MeshBasicMaterial({
+        color: hl.color,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95,
+        side: THREE.DoubleSide,
+      });
+      mesh = new THREE.Mesh(geo, mat);
+      mesh.frustumCulled = false;
+      mesh.userData.entityId = e.id;
+      this.anchorMeshes.set(e.id, mesh);
+      this.group.add(mesh);
+    }
+    mesh.position.set(e.position[0], e.position[1], e.position[2] + 0.002);
+    mesh.renderOrder = renderOrderForDrawLayer(ANCHOR_LAYER);
+    (mesh.material as THREE.MeshBasicMaterial).color.set(hl.color);
+  }
+
+  private removeAnchor(id: string): void {
+    const mesh = this.anchorMeshes.get(id);
+    if (!mesh) return;
+    this.group.remove(mesh);
+    mesh.geometry.dispose();
+    (mesh.material as THREE.Material).dispose();
+    this.anchorMeshes.delete(id);
   }
 
   private removeObject(id: string): void {

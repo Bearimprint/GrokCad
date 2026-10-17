@@ -3,7 +3,11 @@
  */
 
 import { sampleArc, sampleCircle } from './drawing';
+import { isInsertionsTab } from './drawLayers';
 import { cloneEntity, translateEntity } from './entityOps';
+import { hostById } from './insertHost';
+import { frameFromPlacement } from './insertOpening';
+import { placeInsertEntities, type InsertFrame } from './insertTransform';
 import { objectDefCache } from './objectCache';
 import type {
   Entity,
@@ -12,6 +16,7 @@ import type {
   ObjectInstanceEntity,
   Vec3,
 } from './types';
+import { polylineStrokes } from './polyline';
 import { wallEntityStrokes } from './walls';
 
 export interface ObjStroke {
@@ -32,8 +37,9 @@ export function createObjectInstance(
   name: string,
   origin: Vec3,
   rotation = 0,
+  opts?: { insert?: ObjectInstanceEntity['insert'] },
 ): ObjectInstanceEntity {
-  return {
+  const inst: ObjectInstanceEntity = {
     id: nextObjectId(),
     kind: 'object',
     layer: 'OBJETS',
@@ -42,6 +48,8 @@ export function createObjectInstance(
     origin: [origin[0], origin[1], origin[2]],
     rotation,
   };
+  if (opts?.insert) inst.insert = { ...opts.insert };
+  return inst;
 }
 
 /** Applique origin (+ rotation Z future) à un point local. */
@@ -70,13 +78,19 @@ export function localToWorld(
 export function expandObjectEntities(
   inst: ObjectInstanceEntity,
   def?: GkdDocument | null,
+  hosts?: readonly Entity[],
 ): Entity[] {
   const doc = def ?? objectDefCache.get(inst.libTab, inst.libName);
   if (!doc) return [];
+
+  if (inst.insert && isInsertionsTab(inst.libTab)) {
+    const placed = expandInsertInstance(inst, doc, hosts);
+    if (placed) return placed;
+  }
+
   const out: Entity[] = [];
   for (const e of doc.entities) {
     if (e.kind === 'helper' || e.kind === 'object') continue;
-    // clone + rotate/translate
     let c = cloneEntity(e);
     if (Math.abs(inst.rotation) > 1e-12) {
       c = rotateEntityZ(c, inst.rotation);
@@ -85,6 +99,36 @@ export function expandObjectEntities(
     out.push(c);
   }
   return out;
+}
+
+function expandInsertInstance(
+  inst: ObjectInstanceEntity,
+  def: GkdDocument,
+  hosts?: readonly Entity[],
+): Entity[] | null {
+  const ins = inst.insert!;
+  const host = hosts ? hostById(hosts, ins.hostId) : null;
+  if (host) {
+    const frame = frameFromPlacement(host, ins, def.entities);
+    if (frame) return placeInsertEntities(def.entities, frame);
+  }
+  let axisX: Vec3 = [
+    Math.cos(inst.rotation),
+    Math.sin(inst.rotation),
+    0,
+  ];
+  let axisY: Vec3 = [-axisX[1], axisX[0], 0];
+  if (ins.flipCtrl) axisX = [-axisX[0], -axisX[1], 0];
+  if (ins.xSign === -1) axisX = [-axisX[0], -axisX[1], 0];
+  if (ins.flipAlt) axisY = [-axisY[0], -axisY[1], 0];
+  return placeInsertEntities(def.entities, {
+    origin: inst.origin,
+    axisX,
+    axisY,
+    scaleX: ins.scaleX,
+    scaleY: ins.scaleY,
+    scaleZ: ins.scaleZ,
+  });
 }
 
 function rotateEntityZ(e: Entity, rot: number): Entity {
@@ -119,6 +163,25 @@ function rotateEntityZ(e: Entity, rot: number): Entity {
       rotation: e.rotation + rot,
     };
   }
+  if (e.kind === 'polyline') {
+    return {
+      ...e,
+      segments: e.segments.map((s) => {
+        if (s.type === 'line') {
+          return { ...s, start: r(s.start), end: r(s.end) };
+        }
+        return {
+          ...s,
+          center: r(s.center),
+          startAngle: s.startAngle + rot,
+          endAngle: s.endAngle + rot,
+        };
+      }),
+    };
+  }
+  if (e.kind === 'point') {
+    return { ...e, position: r(e.position) };
+  }
   return e;
 }
 
@@ -126,8 +189,9 @@ function rotateEntityZ(e: Entity, rot: number): Entity {
 export function objectInstanceStrokes(
   inst: ObjectInstanceEntity,
   def?: GkdDocument | null,
+  hosts?: readonly Entity[],
 ): ObjStroke[] {
-  const entities = expandObjectEntities(inst, def);
+  const entities = expandObjectEntities(inst, def, hosts);
   const strokes: ObjStroke[] = [];
   for (const e of entities) {
     if (e.kind === 'line') {
@@ -151,6 +215,15 @@ export function objectInstanceStrokes(
         lineWidth: e.lineWidth,
         lineStyle: e.lineStyle,
       });
+    } else if (e.kind === 'polyline') {
+      for (const s of polylineStrokes(e)) {
+        strokes.push({
+          points: s.points,
+          color: s.color,
+          lineWidth: s.lineWidth,
+          lineStyle: s.lineStyle,
+        });
+      }
     } else if (e.kind === 'wall') {
       for (const s of wallEntityStrokes(e, 24)) {
         strokes.push({
@@ -184,4 +257,59 @@ export function previewObjectStrokes(
     rotation,
   };
   return objectInstanceStrokes(fake, def);
+}
+
+/** Aperçu d’une insertion (définition déjà en cache). */
+export function previewInsertStrokes(
+  tab: string,
+  name: string,
+  frame: InsertFrame,
+): ObjStroke[] {
+  const def = objectDefCache.get(tab, name);
+  if (!def) return [];
+  const entities = placeInsertEntities(def.entities, frame);
+  const strokes: ObjStroke[] = [];
+  for (const e of entities) {
+    if (e.kind === 'line') {
+      strokes.push({
+        points: [e.start, e.end],
+        color: e.color,
+        lineWidth: e.lineWidth,
+        lineStyle: e.lineStyle,
+      });
+    } else if (e.kind === 'circle') {
+      strokes.push({
+        points: sampleCircle(e, 48),
+        color: e.color,
+        lineWidth: e.lineWidth,
+        lineStyle: e.lineStyle,
+      });
+    } else if (e.kind === 'arc') {
+      strokes.push({
+        points: sampleArc(e, 48),
+        color: e.color,
+        lineWidth: e.lineWidth,
+        lineStyle: e.lineStyle,
+      });
+    } else if (e.kind === 'polyline') {
+      for (const s of polylineStrokes(e)) {
+        strokes.push({
+          points: s.points,
+          color: s.color,
+          lineWidth: s.lineWidth,
+          lineStyle: s.lineStyle,
+        });
+      }
+    } else if (e.kind === 'wall') {
+      for (const s of wallEntityStrokes(e, 24)) {
+        strokes.push({
+          points: s.points,
+          color: s.color,
+          lineWidth: s.lineWidth,
+          lineStyle: s.lineStyle,
+        });
+      }
+    }
+  }
+  return strokes;
 }

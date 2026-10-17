@@ -1,6 +1,7 @@
 import { executeLine, type CommandContext, type FeedbackLevel } from '../commands/registry';
 import type { AppPrefsManager } from '../core/appPrefs';
 import type { DimPrefsManager } from '../core/dimPrefs';
+import type { DrawLayerManager } from '../core/drawLayers';
 import type { CadDocument } from '../core/document';
 import type { PenManager } from '../core/penPrefs';
 import type { SelectionManager } from '../core/selection';
@@ -12,6 +13,7 @@ import type { WallLibraryManager } from '../core/wallPrefs';
 import type { DimStyleDialog } from './DimStyleDialog';
 import { getFileBrowser } from './FileBrowserDialog';
 import type { HatchLibraryDialog } from './HatchLibraryDialog';
+import type { LayersDialog } from './LayersDialog';
 import type { ObjectLibraryDialog } from './ObjectLibraryDialog';
 import type { SettingsDialog } from './SettingsDialog';
 import type { WallLibraryDialog } from './WallLibraryDialog';
@@ -44,6 +46,8 @@ export class CommandBar {
     textPrefs: TextPrefsManager,
     dimPrefs: DimPrefsManager,
     dimStyles: DimStyleDialog,
+    layers: DrawLayerManager,
+    layersDialog: LayersDialog,
     setDocTitle: (name: string) => void,
   ) {
     this.input = input;
@@ -66,6 +70,8 @@ export class CommandBar {
       textPrefs,
       dimPrefs,
       dimStyles,
+      layers,
+      layersDialog,
       feedback: (msg, level) => this.setFeedback(msg, level),
       setDocTitle,
       focusCommand: () => this.focus(),
@@ -109,6 +115,12 @@ export class CommandBar {
           e.preventDefault();
           e.stopPropagation();
           dimStyles.close();
+          return;
+        }
+        if (layersDialog.isOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          layersDialog.close();
           return;
         }
         // Dialogue saisie texte (bloc-notes /text)

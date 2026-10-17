@@ -98,12 +98,19 @@ export function createCircleEntity(
 /** Point : couleur + épaisseur (px écran) ; le style de trait est ignoré. */
 export function createPointEntity(
   position: Vec3,
-  opts: { color: string; lineWidth: number; layer?: string; id?: string },
+  opts: {
+    color: string;
+    lineWidth: number;
+    layer?: string;
+    drawLayer?: number;
+    id?: string;
+  },
 ): PointEntity {
   return {
     id: opts.id ?? nextDrawId('pt'),
     kind: 'point',
     layer: opts.layer ?? DRAW_LAYER,
+    drawLayer: opts.drawLayer,
     position: [position[0], position[1], position[2]],
     color: opts.color,
     lineWidth: Math.max(1, Math.min(7, Math.round(opts.lineWidth) || 1)),

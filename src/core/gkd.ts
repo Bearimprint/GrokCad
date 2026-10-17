@@ -1,10 +1,16 @@
 import { computeDefaultLabelPositions } from './dimension';
 import {
+  DEFAULT_DRAW_LAYER,
+  normalizeDrawLayerTable,
+  parseEntityDrawLayer,
+} from './drawLayers';
+import {
   APP_VERSION,
   GKD_MAGIC,
   type CameraState,
   type DimensionEntity,
   type GkdDocument,
+  type InsertPlacement,
   type JonctionStrategyId,
 } from './types';
 import { DEFAULT_UNIT, isUnitId } from './units';
@@ -45,6 +51,8 @@ export function createEmptyDocument(title = 'Sans titre'): GkdDocument {
     entities: [],
     wallLibrary: [],
     objectLibrary: [],
+    drawLayers: [{ id: 1, label: 'Bedrock layer' }],
+    currentDrawLayer: DEFAULT_DRAW_LAYER,
     meta: { title, units: DEFAULT_UNIT },
   };
 }
@@ -111,10 +119,42 @@ export function parseGkd(text: string): GkdDocument {
       ? normalizeWallLibrary(doc.wallLibrary)
       : [],
     objectLibrary: Array.isArray(doc.objectLibrary) ? doc.objectLibrary : [],
+    drawLayers: normalizeDrawLayerTable(doc.drawLayers),
+    currentDrawLayer: parseCurrentDrawLayer(doc.currentDrawLayer, entities),
     meta: {
       ...doc.meta,
       units: isUnitId(doc.meta?.units) ? doc.meta.units : DEFAULT_UNIT,
     },
+  };
+}
+
+function parseCurrentDrawLayer(
+  raw: unknown,
+  entities: GkdDocument['entities'],
+): number {
+  const n = parseEntityDrawLayer(raw);
+  // Fichier sans calques d’insertion : ne pas restaurer une couche négative
+  if (n < 0 && !entities.some((e) => parseEntityDrawLayer(e.drawLayer) < 0)) {
+    return DEFAULT_DRAW_LAYER;
+  }
+  return n;
+}
+
+function normalizeInsert(raw: unknown): InsertPlacement | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Partial<InsertPlacement>;
+  if (typeof o.hostId !== 'string' || !o.hostId.trim()) return undefined;
+  const num = (v: unknown, d: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? v : d;
+  return {
+    hostId: o.hostId.trim(),
+    along: Math.max(0, num(o.along, 0)),
+    flipAlt: Boolean(o.flipAlt),
+    flipCtrl: Boolean(o.flipCtrl),
+    scaleX: Math.max(0.001, Math.abs(num(o.scaleX, 1))),
+    scaleY: Math.max(0.001, Math.abs(num(o.scaleY, 1))),
+    scaleZ: Math.max(0.001, Math.abs(num(o.scaleZ, 1))),
+    xSign: o.xSign === -1 ? -1 : 1,
   };
 }
 
@@ -182,8 +222,29 @@ function ensureEntityId(
   return `${kind}_${index}_${Date.now().toString(36)}`;
 }
 
+function stampDrawLayer(
+  e: GkdDocument['entities'][number],
+  raw: GkdDocument['entities'][number],
+): GkdDocument['entities'][number] {
+  const drawLayer = parseEntityDrawLayer(
+    (raw as { drawLayer?: unknown }).drawLayer,
+  );
+  if (e.kind === 'object') {
+    const insert = normalizeInsert((raw as { insert?: unknown }).insert);
+    return insert ? { ...e, drawLayer, insert } : { ...e, drawLayer };
+  }
+  return { ...e, drawLayer };
+}
+
 /** Complète les champs de trait manquants (anciens .GKD). */
 function normalizeEntity(
+  e: GkdDocument['entities'][number],
+  index = 0,
+): GkdDocument['entities'][number] {
+  return stampDrawLayer(normalizeEntityKind(e, index), e);
+}
+
+function normalizeEntityKind(
   e: GkdDocument['entities'][number],
   index = 0,
 ): GkdDocument['entities'][number] {

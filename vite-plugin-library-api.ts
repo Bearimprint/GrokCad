@@ -1,18 +1,29 @@
 /**
  * API dev : lecture / écriture du dossier library/ sur le disque.
  * Routes :
- *   GET  /api/library              → { tabs: string[] }
- *   GET  /api/library/:tab         → { files: { name, path }[] }
- *   GET  /api/library/:tab/:file   → contenu .gkd (text)
- *   PUT  /api/library/:tab/:file   → body = JSON .gkd
- *   DELETE /api/library/:tab/:file
+ *   GET  /api/library                         → { tabs: string[] }
+ *   GET  /api/library/:tab                    → { files, subtabs? }
+ *   GET  /api/library/:tab/:sub/:file         → contenu .gkd (chemins imbriqués)
+ *   PUT / DELETE idem
+ *
+ * Les onglets peuvent être imbriqués (ex. insertions/doors).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Connect, Plugin } from 'vite';
 
-const DEFAULT_TABS = ['sanitaire', 'electrique', 'salon', 'chambre', 'hatch', 'walls'];
+const DEFAULT_TABS = [
+  'sanitaire',
+  'electrique',
+  'salon',
+  'chambre',
+  'hatch',
+  'walls',
+  'insertions',
+];
+
+const INSERTION_SUBS = ['doors', 'windows', 'others'];
 
 /** Extensions de fichiers library servis en plus de .gkd (ex. catalogue couches). */
 const EXTRA_EXTS = ['.json'];
@@ -27,6 +38,16 @@ function safeName(name: string): string | null {
   return n;
 }
 
+function safeSegs(parts: string[]): string[] | null {
+  const segs: string[] = [];
+  for (const p of parts) {
+    const s = safeName(p);
+    if (!s) return null;
+    segs.push(s);
+  }
+  return segs;
+}
+
 function readBody(req: Connect.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -36,13 +57,20 @@ function readBody(req: Connect.IncomingMessage): Promise<string> {
   });
 }
 
+function isExtraFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  return EXTRA_EXTS.some((ext) => lower.endsWith(ext));
+}
+
 export function libraryApiPlugin(libraryRoot: string): Plugin {
   return {
     name: 'grokcad-library-api',
     configureServer(server) {
-      // Créer les onglets par défaut s'ils manquent
       ensureDir(libraryRoot);
       for (const t of DEFAULT_TABS) ensureDir(path.join(libraryRoot, t));
+      for (const sub of INSERTION_SUBS) {
+        ensureDir(path.join(libraryRoot, 'insertions', sub));
+      }
 
       server.middlewares.use(async (req, res, next) => {
         const url = req.url ?? '';
@@ -78,44 +106,69 @@ export function libraryApiPlugin(libraryRoot: string): Plugin {
             return;
           }
 
-          const tab = safeName(parts[0] ?? '');
-          if (!tab) {
+          const segs = safeSegs(parts);
+          if (!segs || segs.length === 0) {
             res.statusCode = 400;
-            res.end(JSON.stringify({ error: 'Onglet invalide' }));
+            res.end(JSON.stringify({ error: 'Chemin invalide' }));
             return;
           }
-          const tabDir = path.join(libraryRoot, tab);
 
-          // GET /api/library/:tab
-          if (parts.length === 1 && req.method === 'GET') {
-            ensureDir(tabDir);
-            const files = fs
-              .readdirSync(tabDir, { withFileTypes: true })
+          const absDirAll = path.join(libraryRoot, ...segs);
+          const last = segs[segs.length - 1]!;
+          const parentSegs = segs.slice(0, -1);
+          const parentDir = path.join(libraryRoot, ...parentSegs);
+
+          const asDir =
+            fs.existsSync(absDirAll) && fs.statSync(absDirAll).isDirectory();
+
+          // GET / POST répertoire
+          if (asDir && (req.method === 'GET' || req.method === 'POST')) {
+            ensureDir(absDirAll);
+            if (req.method === 'POST') {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ ok: true, tab: segs.join('/') }));
+              return;
+            }
+            const entries = fs.readdirSync(absDirAll, { withFileTypes: true });
+            const files = entries
               .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.gkd'))
               .map((e) => ({
                 name: e.name.replace(/\.gkd$/i, ''),
                 file: e.name,
               }))
               .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+            const subtabs = entries
+              .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+              .map((e) => e.name)
+              .sort((a, b) => a.localeCompare(b, 'fr'));
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ tab, files }));
+            res.end(
+              JSON.stringify({
+                tab: segs.join('/'),
+                files,
+                subtabs,
+              }),
+            );
             return;
           }
 
-          const fileBase = safeName(parts[1] ?? '');
-          if (!fileBase) {
-            res.statusCode = 400;
-            res.end(JSON.stringify({ error: 'Nom de fichier invalide' }));
+          // POST crée le dossier (même s’il n’existe pas encore)
+          if (req.method === 'POST') {
+            ensureDir(absDirAll);
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ ok: true, tab: segs.join('/') }));
             return;
           }
-          const lower = fileBase.toLowerCase();
-          const hasExtraExt = EXTRA_EXTS.some((ext) => lower.endsWith(ext));
+
+          // Fichier : dernier segment = nom
+          const hasExtraExt = isExtraFile(last);
           const fileName =
-            lower.endsWith('.gkd') || hasExtraExt ? fileBase : `${fileBase}.gkd`;
-          const filePath = path.join(tabDir, fileName);
+            last.toLowerCase().endsWith('.gkd') || hasExtraExt
+              ? last
+              : `${last}.gkd`;
+          const filePath = path.join(parentDir, fileName);
 
-          // GET file
-          if (parts.length === 2 && req.method === 'GET') {
+          if (req.method === 'GET') {
             if (!fs.existsSync(filePath)) {
               res.statusCode = 404;
               res.end(JSON.stringify({ error: 'Fichier introuvable' }));
@@ -126,31 +179,25 @@ export function libraryApiPlugin(libraryRoot: string): Plugin {
             return;
           }
 
-          // PUT file
-          if (parts.length === 2 && req.method === 'PUT') {
-            ensureDir(tabDir);
+          if (req.method === 'PUT') {
+            ensureDir(parentDir);
             const body = await readBody(req);
-            // Valider JSON minimal
             JSON.parse(body);
             fs.writeFileSync(filePath, body, 'utf8');
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true, path: `library/${tab}/${fileName}` }));
+            res.end(
+              JSON.stringify({
+                ok: true,
+                path: `library/${[...parentSegs, fileName].join('/')}`,
+              }),
+            );
             return;
           }
 
-          // DELETE file
-          if (parts.length === 2 && req.method === 'DELETE') {
+          if (req.method === 'DELETE') {
             if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ ok: true }));
-            return;
-          }
-
-          // POST /api/library/:tab  body { name } → create empty tab already exists; create tab
-          if (parts.length === 1 && req.method === 'POST') {
-            ensureDir(tabDir);
-            res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true, tab }));
             return;
           }
 

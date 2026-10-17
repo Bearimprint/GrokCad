@@ -6,17 +6,59 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.24.16**
+**Version courante : 0.25.4**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.24.16
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.4
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
+
+---
+
+## Session 2026-10-16 — Étape 0, unités et corrections (→ **0.25.4**)
+
+- **Unités.** Les coordonnées restent dans l’unité du document. Les tolérances physiques sont dans `src/core/tolerances.ts` (mètres) et passent par `metersToDoc` au moment de la comparaison. En mètres le facteur vaut 1. Un `snapTol` explicite n’est pas reconverti. Seuils d’angle nommés : `ANG.antiparallelDot` (−0,95), `ANG.yInLPerpDot` (0,4).
+- **Pieds et pouces** dans `UnitId`. Export DXF `$INSUNITS` : in 1, ft 2, mm 4, cm 5, m 6, km 7.
+- **INSERT** : `insertDepth` est incrémenté ; un bloc déjà en cours d’expansion est signalé comme référence circulaire.
+- **Outils.** `DrawingTools` reste la façade. Clics (canvas et `acceptPoint`) passent par `dispatchPoint`. Un seul `ModifierTracker` (`dispose()` sur `beforeunload`). Contraintes, aperçu d’entité, entrée de chaîne et outils simples (`/cut`, `/d`, aides, `/point`, `/dist`) sont dans `src/core/tools/`. Les machines copy/move/m1/r1 et les murs restent sur la façade ; leur aperçu utilise le traceur commun.
+- Messages de longueur (`formatLength`, unité du document). `/pan` aussi. `window.prompt` de `/obj` et `/extract` remplacé par le dialogue (une ligne, Entrée confirme).
+- Test : `scripts/test-units.mts`. `tsc --noEmit` et tous les `scripts/test-*.mts` passent.
+
+## Session 2026-10-03 — ouverture `/iw` (→ **0.25.3**)
+
+- Longueur : la souris étire depuis l’ancre (cote `dx 1.2`) jusqu’au clic, ou `dx 1.2` / `1.2` valide tout de suite. Sens inverse si la souris (ou un `dx` négatif) part de l’autre côté.
+- Largeur : sur un mur, Y étirable (ou symbole tout entier s’il n’a que des calques fixes, ex. `text_rect_Vide` sur −1) est calé sur l’épaisseur (min→max des offsets).
+- Trou : les traits du mur dans cette empreinte sont coupés (rendu, snap, sélection, DXF).
+- Test : `scripts/test-insert-opening.mts`.
+
+## Session 2026-09-06 — `/ancrage` (→ **0.25.2**)
+
+- `/ancrage` `/anchorpoint` `/anchor` `/ap` : force le calque spécial **−9**, pose un unique point d’ancrage (clic G/D ou `X,Y,Z` complet). Pas de vecteur relatif.
+
+---
+
+## Session 2026-09-06 — Portes / Fenêtres / Autres (→ **0.25.1**)
+
+- `library/insertions/{doors,windows,others}/`
+- `/od` `/opendoor` `/insertdoor` `/id` → onglet Portes. `/ow` `/openwindow` `/insertwindow` → Fenêtres. `/oo` `/openother` `/insertother` `/io` → Autres.
+- **`/iw` non réutilisé** (déjà insertion dans un mur).
+- Créer / Modifier : save du dessin, canvas cadre rouge 3 px, liste calques spéciaux (gauche/droite, Paramètres). ID spécial barre ⇄ liste canvas, même source.
+- `/save` insertion : nom seulement ; refuse sans ancre −9 (bouton unique, force −9) ; puis réouvre le .gkd d’origine.
+
+---
+
+## Session 2026-09-06 — calques + insertions mur (→ **0.25.0**)
+
+- **Calques 1–127** (pas de 0) : ordre de dessin, libellé 255 car. Défaut `Couche numero N`, couche 1 = **Bedrock layer**.
+- Champ `drawLayer` sur chaque entité `.gkd` + table `drawLayers` + `currentDrawLayer`. Anciens fichiers → tout en **1**, **sans** calques négatifs.
+- UI : n° dans la barre supérieure, clic = liste n° + libellé. `/calques` `/layers` `/couche n`.
+- **Calques −1…−127** (objets `library/insertions/`) : fixe / étirable X Y Z / ancre −9 (rond orange). Visibles dans la barre seulement en édition insertions.
+- **`/iw` `/insertinwall` `/iiw`** : biblio insertions → désigner mur/ligne/arc → [ALT] intérieur/extérieur, [CTRL] miroir le long de l’hôte → étirer X (souris ou `0.65`). Ancre −9 obligatoire.
 
 ---
 
@@ -219,7 +261,7 @@ Revue `/jonction` + `/join` : bugs de snap T/Y, peigne, zone L, stratégie Y/N.
 
 ## Checklist reprise 30 s
 
-1. `lancer-GrokCad.sh` → **GrokCad v.0.24.16**
+1. `lancer-GrokCad.sh` → **GrokCad v.0.25.4**
 2. Smoke texte : `/txt Cuisine` · `/rect` + Shift · `/textbox`
 3. Smoke cote : `/cote` (2+ segments, Échap, sélection texte seul, `/m1` ligne vs texte)
 4. Smoke move : `/move` et `/m1` avec **[Shift]** H/45°/V
@@ -288,6 +330,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 | `/join` peigne bandes / béton / peaux ext. | **validé UI** | **0.22.4–0.22.5** |
 | `/dist` mesure 2 points | **fait** | **0.22.5** |
 | `/grid` on\|off · `/gridsnap` on\|off | **fait** | **0.24.16** |
+| Étape 0 — tolérances, unités, DXF, découpe outils | **fait** | **0.25.4** |
 | `/join` + `/jonction` Y : BIM priorités (béton↔béton, isolant stop net) | **OK** | **0.24.10** |
 | `/jonction` T/Y multi-extrémités (cadre) | partiel | 0.18.x |
 | `/extrude` · Undo | pas commencé | — |
@@ -298,7 +341,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 
 | Sujet | Décision |
 |-------|----------|
-| Unités | stockées en unité doc ; grille espacée en **mètres réels** |
+| Unités | coordonnées dans l’unité du document ; tolérances en mètres (`tolerances.ts` + `metersToDoc`) ; grille en **mètres réels** ; changer d’unité met le dessin à l’échelle |
 | Vecteurs ligne | forme décollée : `dx 1.5` |
 | Jonction L | snap = intersection des **axes** |
 | `/join` T mid | peigne bandes : béton = entrée ouverte, face0 continue |

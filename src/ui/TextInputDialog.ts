@@ -6,6 +6,8 @@ export interface TextInputOptions {
   title?: string;
   initial?: string;
   placeholder?: string;
+  /** Une ligne : champ input, Entrée confirme. Défaut : zone multiligne (Ctrl+Entrée). */
+  singleLine?: boolean;
 }
 
 /**
@@ -16,6 +18,10 @@ export function showTextInputDialog(
   opts: TextInputOptions = {},
 ): Promise<string | null> {
   return new Promise((resolve) => {
+    const single = opts.singleLine === true;
+    const field = single
+      ? `<input class="text-input-area" type="text" spellcheck="false" placeholder="${escapeHtml(opts.placeholder ?? '')}" />`
+      : `<textarea class="text-input-area" rows="6" spellcheck="false" placeholder="${escapeHtml(opts.placeholder ?? 'Saisissez le texte…')}"></textarea>`;
     const overlay = document.createElement('div');
     overlay.className = 'fs-overlay';
     overlay.innerHTML = `
@@ -25,12 +31,7 @@ export function showTextInputDialog(
           <button type="button" class="fs-close" aria-label="Fermer">×</button>
         </header>
         <div class="fs-body text-input-body">
-          <textarea
-            class="text-input-area"
-            rows="6"
-            spellcheck="false"
-            placeholder="${escapeHtml(opts.placeholder ?? 'Saisissez le texte…')}"
-          ></textarea>
+          ${field}
         </div>
         <footer class="fs-footer">
           <button type="button" class="fs-btn" data-act="cancel">Annuler</button>
@@ -39,7 +40,9 @@ export function showTextInputDialog(
       </div>
     `;
 
-    const ta = overlay.querySelector('.text-input-area') as HTMLTextAreaElement;
+    const ta = overlay.querySelector('.text-input-area') as
+      | HTMLTextAreaElement
+      | HTMLInputElement;
     ta.value = opts.initial ?? '';
 
     const finish = (value: string | null) => {
@@ -53,7 +56,10 @@ export function showTextInputDialog(
         e.preventDefault();
         e.stopPropagation();
         finish(null);
-      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      } else if (
+        e.key === 'Enter' &&
+        (e.ctrlKey || e.metaKey || (single && !e.shiftKey))
+      ) {
         e.preventDefault();
         finish(ta.value);
       }

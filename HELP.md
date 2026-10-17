@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.24.16**  
+> Version de référence : **0.25.4**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -45,7 +45,7 @@ Point accroché réutilisable avec `@`. Souris courante : `.` (ou `m` / `souris`
 
 | Commande | Alias | Usage | Description |
 |----------|-------|-------|-------------|
-| `/pan` | | `<dx> <dy>` | Décalage de vue en **mètres** |
+| `/pan` | | `<dx> <dy>` | Décalage de vue en **unités du document** |
 | `/zoom` | | `<facteur>` | Zoom (`>1` éloigne, `<1` rapproche) |
 | `/center` | `/centrer` `/fit` `/ze` `/extents` | | Cadre tout le dessin |
 | `/view` | | | Position caméra courante |
@@ -180,19 +180,78 @@ Détails : `WALLS.md` · `JONCTION.md`.
 
 ---
 
-## Bibliothèque d’objets (`library/`)
+## Calques (1–127 + insertions −1…−127)
 
-Onglets : `sanitaire`, `electrique`, `salon`, `chambre`.
+Pas de couche **0**. Le numéro = ordre de dessin : **1** en premier (fond), **127** en dernier (devant). Un grand rectangle plein blanc sur 127 masque tout ce qui est en dessous.
+
+Chaque calque a un **libellé de 255 caractères** max. Défaut : `Couche numero 7` (pour 7). La couche 1 s’appelle **Bedrock layer**. Anciens `.gkd` sans calques : toutes les entités → couche **1**, **sans** calques négatifs.
 
 | Commande | Alias | Description |
 |----------|-------|-------------|
-| `/objets` | `/libobj` `/biblioobj` `/objectlib` | Biblio : Choisir/Poser · Modifier |
+| `/calques` | `/layers` `/couches` | Dialogue : liste + libellés éditables |
+| `/couche` | `/layer` `/calque` `/cl` | `[n°]` = calque courant, sans arg = dialogue |
+
+Dans la **barre supérieure** : n° de calque. Clic = liste (n° + libellé). Le prochain objet (comme la couleur) prend ce calque.
+
+### Calques d’insertion (−1…−127)
+
+L’**ID spécial** apparaît à droite de l’ID standard (1–127) dès que la biblio insertions (Portes / Fenêtres / Autres) est ouverte, et pendant le canvas de création / modification (cadre **rouge 3 px**).
+
+Une **liste verticale** des calques spéciaux (hauteur = canvas) s’affiche à **gauche** (défaut) ou à **droite** : Paramètres → *Emplacement de la liste des couches spéciales*.
+
+L’ID spécial de la barre et la ligne surlignée de la liste sont **toujours le même** calque (une seule source).
+
+| Calque | Rôle |
+|--------|------|
+| **−1** | Fixe (taille inchangée) |
+| **−2** | Étirable **X** |
+| **−3** | Étirable **Y** |
+| **−4** | Étirable **Z** |
+| **−5** | XY |
+| **−6** | XZ |
+| **−7** | YZ |
+| **−8** | XYZ |
+| **−9** | **Point d’ancrage** (gros rond orange) — **obligatoire**. `/ancrage` |
+| −10…−127 | Réservés |
+
+| Commande | Alias | Usage | Description |
+|----------|-------|-------|-------------|
+| `/ancrage` | `/anchorpoint` `/anchor` `/ap` | `[x,y,z]` | Pose **le** point d’ancrage (calque **−9** forcé). Sans arg : clic gauche ou droit. Avec arg : coordonnée **complète** X,Y,Z uniquement (`0,0,0` ou `0 0 0`). Pas de `dx` / `dxy` / `.` / `@`. Remplace l’ancre précédente. |
+
+À lancer dans le **canvas d’insertion** (Créer / Modifier). Sans ancre −9, `/save` est refusé.
+
+Les parties étirables se dessinent à **1 m** sur l’axe concerné (échelle simple : `0,65` → 0,65 m). Les parties **fixes** ne changent jamais.
+
+| Commande | Alias utilisables | Description |
+|----------|-------------------|-------------|
+| `/iw` | `/insertinwall` `/iiw` `/insertin` | Pose un objet insertions **dans un mur / une ligne / un arc** |
+| `/od` | `/opendoor` `/insertdoor` `/id` | Biblio insertions → onglet **Portes** (`library/insertions/doors/`) |
+| `/ow` | `/openwindow` `/insertwindow` | Biblio insertions → onglet **Fenêtres** (`library/insertions/windows/`) |
+| `/oo` | `/openother` `/insertother` `/io` | Biblio insertions → onglet **Autres** (`library/insertions/others/`) |
+
+**Alias non pris** (déjà utilisés ailleurs) : **`/iw`** n’ouvre **pas** les fenêtres — c’est l’insertion dans un mur. Pour les fenêtres : `/ow` `/openwindow` `/insertwindow`.
+
+`/iw` : si aucun objet n’est choisi, ouvre la biblio Insertions (onglet Portes). Puis désigner l’hôte. **[ALT]** = autre côté de la ligne de référence. **[CTRL]** = miroir le long de l’hôte.
+
+Ensuite la **longueur** suit la souris à partir de l’ancre (cote à l’écran `dx 1.2`) jusqu’au clic, ou se valide tout de suite avec `dx 1.2` / `dx 1,2` / `1.2` (négatif = autre sens).
+
+Sur un **mur**, les parties étirables en Y (calques −3, −5, −7, −8) prennent l’épaisseur du mur (du plus petit offset au plus grand). Un symbole qui n’a **que** des calques fixes (−1) est traité comme l’ouverture entière : le rectangle de test s’étire en longueur et en largeur. Les traits du mur dont l’offset tombe dans cette empreinte sont **coupés** sur la longueur de l’ouverture (rendu, accroche, export DXF). Les calques fixes (−1) mélangés à un cadre étirable ne bougent pas : seul le cadre étirable s’adapte et perce le mur.
+
+**Créer** / **Modifier** : enregistre d’abord le dessin en cours (`/save` ou `/saveas` si jamais sauvé), puis canvas vide (ou l’objet) avec cadre rouge + liste des calques spéciaux. `/save` ne demande que le **nom** (le dossier est celui de la commande : doors / windows / others). Sans point d’ancrage −9 : message unique *« Revenir au dessin d’insertion et définir le point d’ancrage »*, calque −9 forcé (barre + liste). Après un `/save` réussi : réouverture du dessin d’origine.
+
+## Bibliothèque d’objets (`library/`)
+
+Onglets meubles : `sanitaire`, `electrique`, `salon`, `chambre`. Insertions : `insertions/doors`, `insertions/windows`, `insertions/others` (via `/od` `/ow` `/oo` `/iw`, pas dans `/objets`).
+
+| Commande | Alias | Description |
+|----------|-------|-------------|
+| `/objets` | `/libobj` `/biblioobj` `/objectlib` | Biblio meubles : Choisir/Poser · Modifier |
 | `/obj` | `/objet` `/object` | Sélection → `library/<onglet>/<nom>.gkd` |
 | `/extract` | `/ext` `/extraire` | Comme `/obj` hors library |
 | `/explode` | `/expld` `/disassociate` `/dissocier` | Instance → éléments basiques (irréversible) |
 | `/closelib` | `/fermerlib` `/libclose` | Ferme l’édition library |
 
-Une instance `object` référence le fichier library. `/save` dans l’éditeur met à jour toutes les instances.
+Une instance `object` référence le fichier library. `/save` dans l’éditeur d’insertion enregistre l’objet puis revient au dessin principal.
 
 ---
 
@@ -253,9 +312,9 @@ Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge 
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.24.15
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.4
 ```
 
 ---
 
-*GrokCAD v0.24.15 — aide commandes*
+*GrokCAD v0.25.4 — aide commandes*

@@ -16,6 +16,7 @@ import type {
   WallEntity,
   WallStrokeGeom,
 } from './types';
+import type { UnitId } from './units';
 import {
   applyWallJointsToEntities,
   cloneWallSegments,
@@ -363,6 +364,7 @@ export function cloneAndTranslate(
   dx: number,
   dy: number,
   dz = 0,
+  unit: UnitId = 'm',
 ): Entity[] {
   const idMap = new Map<string, string>();
   const cloned = entities.map((e) => {
@@ -381,7 +383,7 @@ export function cloneAndTranslate(
       c.dimId = mapped;
     }
   }
-  return applyWallJointsToEntities(cloned);
+  return applyWallJointsToEntities(cloned, undefined, 'first-hit', unit);
 }
 
 /**
@@ -391,11 +393,12 @@ export function cloneAndTranslate(
 export function extractAtOrigin(
   entities: readonly Entity[],
   origin: Vec3,
+  unit: UnitId = 'm',
 ): Entity[] {
   const dx = -origin[0];
   const dy = -origin[1];
   const dz = -origin[2];
-  return cloneAndTranslate(entities, dx, dy, dz);
+  return cloneAndTranslate(entities, dx, dy, dz, unit);
 }
 
 /** Boîte englobante XY d'un ensemble d'entités (pour vignettes biblio). */

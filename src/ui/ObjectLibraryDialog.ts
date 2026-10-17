@@ -4,6 +4,14 @@
  * Choisir → pose instance · Modifier → ouvre le .gkd library.
  */
 
+import {
+  INSERTION_CATEGORIES,
+  INSERTION_CATEGORY_LABELS,
+  INSERTIONS_TAB,
+  insertionTab,
+  isInsertionsTab,
+  type InsertCategory,
+} from '../core/drawLayers';
 import { objectDefCache } from '../core/objectCache';
 import {
   createLibraryTab,
@@ -16,6 +24,9 @@ import {
 } from '../core/objectLibrary';
 import type { GkdDocument } from '../core/types';
 
+/** Onglets techniques, pas des meubles. */
+const HIDDEN_TABS = new Set(['hatch', 'walls']);
+
 const CELL = 88;
 
 export type ObjLibFeedback = (
@@ -25,6 +36,7 @@ export type ObjLibFeedback = (
 
 export type PlaceObjectHandler = (tab: string, name: string, doc: GkdDocument) => void;
 export type EditObjectHandler = (tab: string, name: string, doc: GkdDocument) => void;
+export type CreateInsertHandler = (tab: string) => void;
 
 export class ObjectLibraryDialog {
   private overlay: HTMLElement;
@@ -37,6 +49,12 @@ export class ObjectLibraryDialog {
   private feedback: ObjLibFeedback = () => undefined;
   private onPlace: PlaceObjectHandler | null = null;
   private onEdit: EditObjectHandler | null = null;
+  /** Si défini, « Choisir » appelle ceci au lieu de onPlace (ex. /iw). */
+  private onInsertPick: PlaceObjectHandler | null = null;
+  private onCreateInsert: CreateInsertHandler | null = null;
+  private onInsertBrowse: ((open: boolean) => void) | null = null;
+  private tabFilter: string[] | null = null;
+  private allowAddTab = true;
   private resizing = false;
   private resizeStart = { x: 0, y: 0, w: 0, h: 0 };
   private panel: HTMLElement;
@@ -59,6 +77,7 @@ export class ObjectLibraryDialog {
         <div class="walls-toolbar">
           <div class="walls-actions">
             <button type="button" class="walls-btn" data-act="refresh">Actualiser</button>
+            <button type="button" class="walls-btn hidden" data-act="create" title="Nouveau dessin d’insertion">Créer</button>
             <button type="button" class="walls-btn" data-act="edit" title="Ouvrir pour modification">Modifier</button>
             <button type="button" class="walls-btn" data-act="del">Supprimer</button>
             <button type="button" class="walls-btn walls-btn-primary" data-act="pick">Choisir / Poser</button>
@@ -89,6 +108,7 @@ export class ObjectLibraryDialog {
         else if (act === 'del') void this.onDelete();
         else if (act === 'pick') void this.onPick();
         else if (act === 'edit') void this.onEditClick();
+        else if (act === 'create') this.onCreateClick();
       });
     });
 
@@ -132,17 +152,75 @@ export class ObjectLibraryDialog {
     this.onEdit = fn;
   }
 
+  setCreateInsertHandler(fn: CreateInsertHandler): void {
+    this.onCreateInsert = fn;
+  }
+
+  setInsertBrowseHandler(fn: (open: boolean) => void): void {
+    this.onInsertBrowse = fn;
+  }
+
+  get activeInsertTab(): string {
+    return this.activeTab;
+  }
+
   isOpen(): boolean {
     return !this.overlay.classList.contains('hidden');
   }
 
   async open(): Promise<void> {
+    this.tabFilter = null;
+    this.onInsertPick = null;
+    this.allowAddTab = true;
+    this.setCreateVisible(false);
+    this.onInsertBrowse?.(false);
+    this.overlay.querySelector('#objlib-title')!.textContent =
+      'Bibliothèque d’objets';
+    if (isInsertionsTab(this.activeTab)) this.activeTab = 'sanitaire';
+    this.overlay.classList.remove('hidden');
+    await this.reload();
+  }
+
+  /**
+   * Bibliothèque insertions : onglets Portes / Fenêtres / Autres.
+   * @param category onglet de départ (doors par défaut)
+   * @param onPick si fourni, « Choisir » lance la pose dans un hôte (/iw)
+   */
+  async openInsertions(
+    category: InsertCategory = 'doors',
+    onPick?: PlaceObjectHandler,
+  ): Promise<void> {
+    this.tabFilter = INSERTION_CATEGORIES.map((c) => insertionTab(c));
+    this.onInsertPick = onPick ?? null;
+    this.allowAddTab = false;
+    this.activeTab = insertionTab(category);
+    this.setCreateVisible(true);
+    this.overlay.querySelector('#objlib-title')!.textContent =
+      'Insertions (murs, lignes, arcs)';
+    const hint = this.overlay.querySelector('.walls-hint');
+    if (hint) {
+      hint.innerHTML = onPick
+        ? 'Choisissez une <strong>porte</strong>, <strong>fenêtre</strong> ou <strong>autre</strong> — ancre <strong>−9</strong> obligatoire. <strong>Créer</strong> / <strong>Modifier</strong> : canvas d’insertion (cadre rouge).'
+        : 'Onglets <strong>Portes</strong>, <strong>Fenêtres</strong>, <strong>Autres</strong>. <strong>Créer</strong> un nouvel objet ou <strong>Modifier</strong> un existant. Ancre <strong>−9</strong> obligatoire.';
+    }
+    this.onInsertBrowse?.(true);
     this.overlay.classList.remove('hidden');
     await this.reload();
   }
 
   close(): void {
     this.overlay.classList.add('hidden');
+    this.onInsertPick = null;
+    this.setCreateVisible(false);
+    this.onInsertBrowse?.(false);
+    const hint = this.overlay.querySelector('.walls-hint');
+    if (hint) {
+      hint.innerHTML = `
+          <strong>Choisir</strong> : objet collé à la souris (origine 0,0,0) jusqu’au clic.
+          <strong>Modifier</strong> : ouvre le .gkd library dans le canvas (sauvegarder = maj de toutes les instances).
+          Créer : <strong>/obj</strong> · Exploser une instance : <strong>/explode</strong>.
+        `;
+    }
   }
 
   async promptSave(suggestedName: string): Promise<{ tab: string; name: string } | null> {
@@ -164,7 +242,13 @@ export class ObjectLibraryDialog {
   }
 
   private async reload(): Promise<void> {
-    const tabs = await listLibraryTabs();
+    let tabs = await listLibraryTabs();
+    if (this.tabFilter) {
+      tabs = tabs.filter((t) => this.tabFilter!.includes(t));
+      if (tabs.length === 0) tabs = [...this.tabFilter];
+    } else {
+      tabs = tabs.filter((t) => !HIDDEN_TABS.has(t) && t !== INSERTIONS_TAB);
+    }
     if (!tabs.includes(this.activeTab) && tabs[0]) this.activeTab = tabs[0];
     this.renderTabs(tabs);
     this.files = await listLibraryFiles(this.activeTab);
@@ -177,13 +261,20 @@ export class ObjectLibraryDialog {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'walls-tab' + (tab === this.activeTab ? ' active' : '');
-      b.textContent = tab;
+      const cat = tab.startsWith(`${INSERTIONS_TAB}/`)
+        ? tab.slice(INSERTIONS_TAB.length + 1)
+        : tab;
+      b.textContent =
+        cat in INSERTION_CATEGORY_LABELS
+          ? INSERTION_CATEGORY_LABELS[cat as InsertCategory]
+          : tab;
       b.addEventListener('click', () => {
         this.activeTab = tab;
         void this.reload();
       });
       this.tabsEl.appendChild(b);
     }
+    if (!this.allowAddTab) return;
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'walls-tab walls-tab-add';
@@ -307,9 +398,10 @@ export class ObjectLibraryDialog {
     if (!loaded) return;
     this.current = loaded;
     objectDefCache.set(loaded.tab, loaded.name, loaded.doc);
+    const pick = this.onInsertPick ?? this.onPlace;
     this.close();
-    if (this.onPlace) {
-      this.onPlace(loaded.tab, loaded.name, loaded.doc);
+    if (pick) {
+      pick(loaded.tab, loaded.name, loaded.doc);
     } else {
       this.feedback(`Objet « ${loaded.name} » prêt (pas de handler de pose).`, 'warn');
     }
@@ -325,5 +417,20 @@ export class ObjectLibraryDialog {
     } else {
       this.feedback('Édition library non branchée.', 'err');
     }
+  }
+
+  private onCreateClick(): void {
+    if (!this.onCreateInsert) {
+      this.feedback('Création d’insertion non branchée.', 'err');
+      return;
+    }
+    const tab = this.activeTab;
+    this.close();
+    this.onCreateInsert(tab);
+  }
+
+  private setCreateVisible(on: boolean): void {
+    const btn = this.overlay.querySelector<HTMLElement>('[data-act="create"]');
+    btn?.classList.toggle('hidden', !on);
   }
 }

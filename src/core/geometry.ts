@@ -6,6 +6,53 @@ export function v3(x: number, y: number, z: number): Vec3 {
   return [x, y, z];
 }
 
+const RELATIVE_XYZ = /^(d[xyz]{1,3})$/i;
+const POINT_SHORTCUTS = new Set(['.', 'm', 'souris', 'mouse', '@', 'snap']);
+
+/**
+ * Coordonnée absolue complète X,Y,Z uniquement.
+ * Accepte `0,0,0` ou `0 0 0`. Refuse dx/dxy, `.`, `@`, X,Y seul.
+ */
+export function parseAbsoluteXyz(args: string[]):
+  | { ok: true; point: Vec3 }
+  | { ok: false; error: string } {
+  const joined = args.join(' ').trim();
+  if (!joined) {
+    return {
+      ok: false,
+      error: 'Coordonnée X,Y,Z manquante (ex. /ancrage 0,0,0).',
+    };
+  }
+  const tokens = joined.split(/[,\s]+/).filter(Boolean);
+  for (const t of tokens) {
+    const low = t.toLowerCase();
+    if (POINT_SHORTCUTS.has(low) || RELATIVE_XYZ.test(t)) {
+      return {
+        ok: false,
+        error:
+          'Le point d’ancrage exige une coordonnée complète X,Y,Z (ex. 0,0,0). Pas de dx / dxy / . / @.',
+      };
+    }
+  }
+  if (tokens.length !== 3) {
+    return {
+      ok: false,
+      error:
+        'Coordonnée incomplète : il faut X,Y,Z (ex. /ancrage 0,0,0 ou /ancrage 1.2 0.5 0).',
+    };
+  }
+  const x = Number(tokens[0]);
+  const y = Number(tokens[1]);
+  const z = Number(tokens[2]);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    return {
+      ok: false,
+      error: `Coordonnée invalide « ${joined} ». Ex. 0,0,0`,
+    };
+  }
+  return { ok: true, point: [x, y, z] };
+}
+
 export function add(a: Vec3, b: Vec3): Vec3 {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 }

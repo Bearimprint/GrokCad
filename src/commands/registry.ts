@@ -1,6 +1,17 @@
 import type { AppPrefsManager } from '../core/appPrefs';
 import type { CadDocument } from '../core/document';
 import {
+  DRAW_LAYER_MAX,
+  hasAnchorPoint,
+  hasInsertLayers,
+  INSERTION_CATEGORY_LABELS,
+  INSERTIONS_TAB,
+  isDrawLayerId,
+  isInsertionsTab,
+  type InsertCategory,
+} from '../core/drawLayers';
+import { parseAbsoluteXyz } from '../core/geometry';
+import {
   arcFrom3Points,
   arcFromCenterStartEnd,
   createCircleEntity,
@@ -58,8 +69,11 @@ import type { HatchPrefsManager } from '../core/hatchPrefs';
 import type { WallLibraryManager } from '../core/wallPrefs';
 import type { HatchLibraryDialog } from '../ui/HatchLibraryDialog';
 import type { DimStyleDialog } from '../ui/DimStyleDialog';
+import type { LayersDialog } from '../ui/LayersDialog';
 import { showTextInputDialog } from '../ui/TextInputDialog';
+import { formatLength, lengthDigits, type UnitId } from '../core/units';
 import type { Viewport } from '../viewport/Viewport';
+import type { DrawLayerManager } from '../core/drawLayers';
 
 export type FeedbackLevel = 'ok' | 'err' | 'warn' | 'info';
 
@@ -79,13 +93,28 @@ export interface CommandContext {
   textPrefs: TextPrefsManager;
   dimPrefs: DimPrefsManager;
   dimStyles: DimStyleDialog;
+  layers: DrawLayerManager;
+  layersDialog: LayersDialog;
   feedback: (msg: string, level?: FeedbackLevel) => void;
   setDocTitle: (name: string) => void;
   focusCommand: () => void;
   /** Édition library en cours (tab/name) ou null. */
-  getLibraryEdit?: () => { tab: string; name: string } | null;
+  getLibraryEdit?: () => LibraryEditState | null;
   /** Ferme l’édition library et restaure le dessin. */
-  closeLibraryEdit?: () => void;
+  closeLibraryEdit?: () => void | Promise<void>;
+  /** Après save d’un objet d’insertion : revenir au dessin d’origine. */
+  finishInsertSession?: () => Promise<void>;
+  /** Pas d’ancre −9 : force le calque −9 (barre + liste). */
+  onMissingInsertAnchor?: () => void;
+}
+
+export interface LibraryEditState {
+  tab: string;
+  name: string;
+  /** true = canvas d’insertion (cadre rouge). */
+  insertion?: boolean;
+  /** Chemin du .gkd principal à rouvrir après /save. */
+  returnPath?: string | null;
 }
 
 export interface CommandDef {
@@ -128,23 +157,26 @@ const commands: CommandDef[] = [
   // —— Navigation ——
   {
     name: 'pan',
-    summary: 'Décalage de vue en mètres (le glisser-gauche panne déjà par défaut)',
+    summary: 'Décalage de vue en unités du document (le glisser-gauche panne déjà)',
     usage: '<dx> <dy>',
     run: (ctx, args) => {
       if (args.length >= 2) {
         const dx = Number(args[0]);
         const dy = Number(args[1]);
         if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-          ctx.feedback('Usage : /pan <dx> <dy>  (mètres)', 'err');
+          ctx.feedback('Usage : /pan <dx> <dy>  (unités du document)', 'err');
           return;
         }
         ctx.viewport.panByWorld(dx, dy);
         ctx.doc.setCamera(ctx.viewport.getCameraState());
-        ctx.feedback(`Pan ${dx} m, ${dy} m`, 'ok');
+        ctx.feedback(
+          `Pan ${fmtDoc(dx, ctx.doc.units)}, ${fmtDoc(dy, ctx.doc.units)}`,
+          'ok',
+        );
         return;
       }
       ctx.feedback(
-        'Pan souris : glisser bouton gauche (ou milieu). Commande : /pan <dx> <dy> en mètres.',
+        'Pan souris : glisser bouton gauche (ou milieu). Commande : /pan <dx> <dy> en unités du document.',
         'info',
       );
     },
@@ -182,7 +214,7 @@ const commands: CommandDef[] = [
       const cam = ctx.viewport.getCameraState();
       ctx.feedback(
         cam.mode === 'ortho'
-          ? `Vue centrée — emprise complète (halfH=${cam.orthoHalfHeight.toFixed(3)} m, ${cam.workplane}/${cam.mode}).`
+          ? `Vue centrée — emprise complète (halfH=${fmtDoc(cam.orthoHalfHeight, ctx.doc.units)}, ${cam.workplane}/${cam.mode}).`
           : `Vue centrée — emprise complète (${cam.mode}, ${cam.workplane}).`,
         'ok',
       );
@@ -197,7 +229,7 @@ const commands: CommandDef[] = [
       ctx.doc.setCamera(ctx.viewport.getCameraState());
       const c = ctx.viewport.getCameraState();
       ctx.feedback(
-        `Vue axonométrique (iso) — halfH=${c.orthoHalfHeight.toFixed(3)} m · F10 = +45° autour de Z`,
+        `Vue axonométrique (iso) — halfH=${fmtDoc(c.orthoHalfHeight, ctx.doc.units)} · F10 = +45° autour de Z`,
         'ok',
       );
     },
@@ -224,7 +256,7 @@ const commands: CommandDef[] = [
       ctx.doc.setCamera(ctx.viewport.getCameraState());
       const c = ctx.viewport.getCameraState();
       ctx.feedback(
-        `Vue en plan XY — halfH=${c.orthoHalfHeight.toFixed(3)} m · F10 = +45°`,
+        `Vue en plan XY — halfH=${fmtDoc(c.orthoHalfHeight, ctx.doc.units)} · F10 = +45°`,
         'ok',
       );
     },
@@ -235,7 +267,7 @@ const commands: CommandDef[] = [
     run: (ctx) => {
       const c = ctx.viewport.getCameraState();
       ctx.feedback(
-        `cam pos=(${c.position.map(r3).join(', ')}) target=(${c.target.map(r3).join(', ')}) halfH=${c.orthoHalfHeight.toFixed(3)} ${c.mode}/${c.workplane}`,
+        `cam pos=(${c.position.map(r3).join(', ')}) target=(${c.target.map(r3).join(', ')}) halfH=${fmtDoc(c.orthoHalfHeight, ctx.doc.units)} ${c.mode}/${c.workplane}`,
         'info',
       );
     },
@@ -840,7 +872,7 @@ const commands: CommandDef[] = [
           return;
         }
         ctx.doc.addEntity(arc);
-        ctx.feedback(`Arc (centre) r=${arc.radius.toFixed(3)} m créé.`, 'ok');
+        ctx.feedback(`Arc (centre) r=${fmtDoc(arc.radius, ctx.doc.units)} créé.`, 'ok');
         return;
       }
       if (args.length > 0) {
@@ -868,7 +900,7 @@ const commands: CommandDef[] = [
           return;
         }
         ctx.doc.addEntity(arc);
-        ctx.feedback(`Arc (3 pts) r=${arc.radius.toFixed(3)} m créé.`, 'ok');
+        ctx.feedback(`Arc (3 pts) r=${fmtDoc(arc.radius, ctx.doc.units)} créé.`, 'ok');
         return;
       }
       if (args.length > 0) {
@@ -979,7 +1011,7 @@ const commands: CommandDef[] = [
         }
         const r = Math.hypot(edge[0] - center[0], edge[1] - center[1]);
         ctx.doc.addEntity(createCircleEntity(center, r, ctx.pen.strokeFields()));
-        ctx.feedback(`Cercle r=${r.toFixed(3)} m créé.`, 'ok');
+        ctx.feedback(`Cercle r=${fmtDoc(r, ctx.doc.units)} créé.`, 'ok');
         return;
       }
       if (args.length > 0) {
@@ -1501,6 +1533,150 @@ const commands: CommandDef[] = [
     },
   },
 
+  // —— Calques ——
+  {
+    name: 'calques',
+    aliases: ['layers', 'couches', 'layerlist'],
+    summary:
+      'Liste des calques 1–127 (libellé 255 car.). En édition insertions : aussi −1…−127',
+    run: (ctx) => {
+      ctx.layersDialog.toggle();
+      ctx.feedback(
+        ctx.layersDialog.isOpen()
+          ? 'Calques — clic = courant, libellé éditable (255 car.).'
+          : 'Calques fermé.',
+        'info',
+      );
+    },
+  },
+  {
+    name: 'couche',
+    aliases: ['layer', 'calque', 'cl'],
+    summary: 'Calque courant du prochain objet (1–127, ou −1…−127 en insertions)',
+    usage: '[n°]  ou sans arg = dialogue',
+    run: (ctx, args) => {
+      if (args.length === 0) {
+        ctx.layersDialog.open();
+        ctx.feedback(
+          `Calque courant : ${ctx.layers.current}  ${ctx.layers.label(ctx.layers.current)}`,
+          'info',
+        );
+        return;
+      }
+      const n = Number(String(args[0]).replace(',', '.'));
+      if (!isDrawLayerId(n)) {
+        ctx.feedback(
+          `Calque invalide « ${args[0]} ». 1–${DRAW_LAYER_MAX} (pas de 0)${ctx.layers.insertMode ? `, ou ${INSERTIONS_TAB} −1…−127` : ''}.`,
+          'err',
+        );
+        return;
+      }
+      if (n < 0 && !ctx.layers.showSpecialId) {
+        ctx.feedback(
+          'Les calques négatifs ne s’utilisent qu’en création / modification d’un objet library/insertions/.',
+          'err',
+        );
+        return;
+      }
+      if (!ctx.layers.setCurrent(n)) {
+        ctx.feedback(`Impossible d’activer le calque ${n}.`, 'err');
+        return;
+      }
+      ctx.feedback(`Calque → ${n}  ${ctx.layers.label(n)}`, 'ok');
+    },
+  },
+  {
+    name: 'ancrage',
+    aliases: ['anchorpoint', 'anchor', 'ap'],
+    summary:
+      'Point d’ancrage (calque −9) d’un objet d’insertion : clic, ou X,Y,Z complet',
+    usage: '  ·  x,y,z  ·  x y z',
+    run: (ctx, args) => {
+      if (!ctx.layers.insertMode) {
+        ctx.feedback(
+          'Le point d’ancrage se pose dans le canvas d’insertion (Créer / Modifier une porte, fenêtre ou autre).',
+          'err',
+        );
+        return;
+      }
+      ctx.layers.forceAnchorLayer();
+      if (args.length === 0) {
+        ctx.tools.startAnchor();
+        return;
+      }
+      const parsed = parseAbsoluteXyz(args);
+      if (!parsed.ok) {
+        ctx.feedback(parsed.error, 'err');
+        return;
+      }
+      ctx.tools.cancel(false);
+      ctx.layers.forceAnchorLayer();
+      ctx.tools.placeAnchor(parsed.point, false);
+    },
+  },
+  {
+    name: 'iw',
+    aliases: ['insertinwall', 'iiw', 'insertin'],
+    summary:
+      'Insère un objet library/insertions/ dans un mur, une ligne ou un arc (ancre −9). Longueur : souris ou dx 1.2. Sur un mur : largeur = épaisseur, traits coupés.',
+    run: async (ctx) => {
+      ctx.tools.cancel(false);
+      const cur = ctx.objLib.current;
+      const ready =
+        cur &&
+        isInsertionsTab(cur.tab) &&
+        hasAnchorPoint(cur.doc.entities);
+      if (ready && cur) {
+        if (!hasInsertLayers(cur.doc.entities)) {
+          const ans = await showConfirm({
+            title: 'Insertion',
+            message:
+              `« ${cur.name} » n’a pas de calques d’insertion (−1…−127).\nIl n’a pas été créé spécifiquement pour être inclus dans un mur, une ligne ou un arc.\nContinuer quand même ?`,
+            buttons: [
+              { id: 'ok', label: 'Continuer', primary: true },
+              { id: 'cancel', label: 'Annuler' },
+            ],
+          });
+          if (ans !== 'ok') {
+            ctx.feedback('Insertion annulée.', 'warn');
+            return;
+          }
+        }
+        ctx.tools.startInsertInHost(cur.tab, cur.name);
+        return;
+      }
+      await openInsertLibrary(ctx, 'doors', true);
+    },
+  },
+  {
+    name: 'od',
+    aliases: ['opendoor', 'insertdoor', 'id'],
+    summary: 'Bibliothèque insertions — onglet Portes (library/insertions/doors/)',
+    run: async (ctx) => {
+      ctx.tools.cancel(false);
+      await openInsertLibrary(ctx, 'doors', false);
+    },
+  },
+  {
+    name: 'ow',
+    aliases: ['openwindow', 'insertwindow'],
+    summary:
+      'Bibliothèque insertions — onglet Fenêtres (library/insertions/windows/). /iw est déjà l’insertion dans un mur.',
+    run: async (ctx) => {
+      ctx.tools.cancel(false);
+      await openInsertLibrary(ctx, 'windows', false);
+    },
+  },
+  {
+    name: 'oo',
+    aliases: ['openother', 'insertother', 'io'],
+    summary: 'Bibliothèque insertions — onglet Autres (library/insertions/others/)',
+    run: async (ctx) => {
+      ctx.tools.cancel(false);
+      await openInsertLibrary(ctx, 'others', false);
+    },
+  },
+
   // —— Stylo ——
   {
     name: 'couleur',
@@ -1646,7 +1822,7 @@ const commands: CommandDef[] = [
         const en = snap.enabled ? 'ON' : 'OFF';
         const world = ctx.viewport.snapToleranceMeters();
         ctx.feedback(
-          `Snap ${en} · rayon ${snap.radiusPx} px (≈ ${world.toFixed(3)} m à ce zoom) · clic droit = accroche · hors rayon = clic gauche · /snap 20 · /param`,
+          `Snap ${en} · rayon ${snap.radiusPx} px (≈ ${fmtDoc(world, ctx.doc.units)} à ce zoom) · clic droit = accroche · hors rayon = clic gauche · /snap 20 · /param`,
           'info',
         );
         return;
@@ -1968,6 +2144,10 @@ function r3(n: number): string {
   return (Math.abs(n) < 1e-9 ? 0 : n).toFixed(3);
 }
 
+function fmtDoc(n: number, unit: UnitId): string {
+  return formatLength(n, unit, lengthDigits(unit));
+}
+
 function isPointToken(t: string): boolean {
   return ['.', 'm', 'souris', 'mouse', '@', 'snap'].includes(t.toLowerCase());
 }
@@ -2148,10 +2328,62 @@ function parseHelperAxisPoint(
  * - forceDialog=false : si filePath connu → écrit direct (Ctrl+S) ; sinon dialogue.
  * - forceDialog=true  : toujours dialogue ; le chemin choisi devient le défaut.
  */
-async function runSave(
+async function openInsertLibrary(
+  ctx: CommandContext,
+  category: InsertCategory,
+  forHostPick: boolean,
+): Promise<void> {
+  const onPick = (
+    tab: string,
+    name: string,
+    doc: import('../core/types').GkdDocument,
+  ) => {
+    if (!hasAnchorPoint(doc.entities)) {
+      ctx.feedback(
+        `« ${name} » n’a pas de point d’ancrage (calque −9). Obligatoire.`,
+        'err',
+      );
+      return;
+    }
+    void (async () => {
+      if (!hasInsertLayers(doc.entities)) {
+        const ans = await showConfirm({
+          title: 'Insertion',
+          message:
+            `« ${name} » n’a pas de calques d’insertion (−1…−127).\nIl n’a pas été créé spécifiquement pour être inclus dans un mur, une ligne ou un arc.\nContinuer quand même ?`,
+          buttons: [
+            { id: 'ok', label: 'Continuer', primary: true },
+            { id: 'cancel', label: 'Annuler' },
+          ],
+        });
+        if (ans !== 'ok') {
+          ctx.feedback('Insertion annulée.', 'warn');
+          return;
+        }
+      }
+      ctx.tools.startInsertInHost(tab, name);
+    })();
+  };
+  await ctx.objLib.openInsertions(category, onPick);
+  const label = INSERTION_CATEGORY_LABELS[category];
+  ctx.feedback(
+    forHostPick
+      ? `Insertions (${label}) — choisissez un objet (ancre −9), puis désignez le mur / la ligne / l’arc.`
+      : `Insertions (${label}) — Créer / Modifier un objet, ou Choisir pour le poser dans un mur.`,
+    'info',
+  );
+}
+
+/**
+ * /save ou /saveas.
+ * - forceDialog=false : si filePath connu → écrit direct (Ctrl+S) ; sinon dialogue.
+ * - forceDialog=true  : toujours dialogue ; le chemin choisi devient le défaut.
+ * @returns true si un fichier a réellement été écrit.
+ */
+export async function runSave(
   ctx: CommandContext,
   opts: { forceDialog: boolean; suggestedName?: string },
-): Promise<void> {
+): Promise<boolean> {
   const libEdit = ctx.getLibraryEdit?.() ?? null;
   const snap = ctx.doc.snapshot(ctx.viewport.getCameraState());
   snap.wallLibrary = ctx.walls.toDocumentLibrary();
@@ -2159,10 +2391,63 @@ async function runSave(
 
   // Mode édition d’un objet library → écrit sur le disque library/
   if (libEdit) {
+    if (libEdit.insertion) {
+      if (!hasAnchorPoint(ctx.doc.entities)) {
+        ctx.onMissingInsertAnchor?.();
+        await showConfirm({
+          title: 'Point d’ancrage obligatoire',
+          message:
+            'Le point d’ancrage (calque −9) est obligatoire pour un objet d’insertion.\nLe dessin ne sera pas enregistré tant que ce point n’aura pas été créé.',
+          buttons: [
+            {
+              id: 'ok',
+              label: 'Revenir au dessin d’insertion et définir le point d’ancrage',
+              primary: true,
+            },
+          ],
+        });
+        ctx.feedback(
+          'Sauvegarde refusée : créez un point sur le calque −9 (ancre).',
+          'err',
+        );
+        return false;
+      }
+      let name = libEdit.name.trim();
+      if (!name || opts.forceDialog) {
+        const suggested = name || opts.suggestedName || 'insertion';
+        const typed = window.prompt(
+          `Nom de l’objet (enregistré dans library/${libEdit.tab}/) :`,
+          suggested,
+        );
+        if (!typed?.trim()) {
+          ctx.feedback('Enregistrement annulé.', 'warn');
+          return false;
+        }
+        name = typed.trim();
+        libEdit.name = name;
+      }
+      const res = await saveLibraryObject(libEdit.tab, name, snap);
+      if (!res.ok) {
+        ctx.feedback(`Échec save library : ${res.error ?? '?'}`, 'err');
+        return false;
+      }
+      objectDefCache.set(libEdit.tab, name, snap);
+      ctx.doc.markSaved();
+      ctx.feedback(
+        `Objet d’insertion enregistré : library/${libEdit.tab}/${name}.gkd`,
+        'ok',
+      );
+      if (ctx.finishInsertSession) await ctx.finishInsertSession();
+      return true;
+    }
+    if (!libEdit.name) {
+      ctx.feedback('Nom d’objet library manquant.', 'err');
+      return false;
+    }
     const res = await saveLibraryObject(libEdit.tab, libEdit.name, snap);
     if (!res.ok) {
       ctx.feedback(`Échec save library : ${res.error ?? '?'}`, 'err');
-      return;
+      return false;
     }
     objectDefCache.set(libEdit.tab, libEdit.name, snap);
     ctx.doc.markSaved();
@@ -2170,7 +2455,7 @@ async function runSave(
       `Library mise à jour : library/${libEdit.tab}/${libEdit.name}.gkd — toutes les instances se rafraîchiront.`,
       'ok',
     );
-    return;
+    return true;
   }
 
   try {
@@ -2181,7 +2466,7 @@ async function runSave(
           'API disque indisponible. Relancez via lancer-GrokCad.sh.',
           'err',
         );
-        return;
+        return false;
       }
       await fsWrite(ctx.doc.filePath, serializeGkd(snap));
       ctx.doc.markSaved();
@@ -2191,7 +2476,7 @@ async function runSave(
         `Enregistré : ${ctx.doc.filePath} (${ctx.doc.helpers.length} aide(s), ${snap.wallLibrary.length} mur(s) biblio)`,
         'ok',
       );
-      return;
+      return true;
     }
 
     // Première sauvegarde ou /saveas → dialogue
@@ -2218,7 +2503,7 @@ async function runSave(
       ctx.doc.filename = suggested;
       ctx.doc.markSaved();
       ctx.setDocTitle(ctx.doc.filename);
-      return;
+      return true;
     }
 
     const dest = await pickSaveFilePath(
@@ -2231,7 +2516,7 @@ async function runSave(
     );
     if (!dest) {
       ctx.feedback('Enregistrement annulé.', 'warn');
-      return;
+      return false;
     }
 
     let path = dest.path;
@@ -2252,7 +2537,7 @@ async function runSave(
       });
       if (ans !== 'ok') {
         ctx.feedback('Enregistrement annulé.', 'warn');
-        return;
+        return false;
       }
     }
 
@@ -2266,8 +2551,10 @@ async function runSave(
       `Enregistré : ${path} (${ctx.doc.helpers.length} aide(s), ${snap.wallLibrary.length} mur(s) biblio)`,
       'ok',
     );
+    return true;
   } catch (e) {
     ctx.feedback(e instanceof Error ? e.message : String(e), 'err');
+    return false;
   }
 }
 
@@ -2415,6 +2702,15 @@ export async function executeLine(line: string, ctx: CommandContext): Promise<vo
 
   // Pendant un outil : une entrée purement « point » place le point
   if (ctx.tools.isActive && !trimmed.startsWith('/') && !trimmed.startsWith('\\')) {
+    if (ctx.tools.acceptInsertSpec(trimmed)) return;
+    const asNum = Number(trimmed.replace(',', '.'));
+    if (
+      Number.isFinite(asNum) &&
+      !trimmed.includes(' ') &&
+      ctx.tools.acceptNumber(asNum)
+    ) {
+      return;
+    }
     const asPoint = parsePoint(trimmed.split(/\s+/).filter(Boolean), ctx);
     if (asPoint) {
       ctx.tools.acceptPoint(asPoint);

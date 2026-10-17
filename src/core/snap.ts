@@ -30,12 +30,15 @@ import type {
   LineEntity,
   Vec3,
 } from './types';
+import { clipWallStrokes, collectWallOpenings } from './insertOpening';
 import { objectInstanceStrokes } from './objectInstance';
 import { wallEntityStrokes } from './walls';
+import type { UnitId } from './units';
+import { metersToDoc, TOL_M } from './tolerances';
 
 const EPS = 1e-9;
-/** Extrémités quasi confondues → traitées comme intersection. */
-const ENDPOINT_MERGE = 0.0005; // m (~0.5 mm)
+/** Extrémités quasi confondues, en mètres (~0,5 mm). */
+const ENDPOINT_MERGE = TOL_M.endpointMerge;
 
 export type SnapKind = 'intersection' | 'endpoint' | 'nearest' | 'grid';
 
@@ -66,6 +69,7 @@ export type SnapCurve =
 export function entitiesToSnapCurves(
   helpers: readonly HelperLineEntity[],
   entities: readonly Entity[],
+  unit: UnitId = 'm',
 ): SnapCurve[] {
   const out: SnapCurve[] = [];
   for (const h of helpers) {
@@ -76,17 +80,20 @@ export function entitiesToSnapCurves(
       direction: h.direction,
     });
   }
+  const openings = collectWallOpenings(entities);
   for (const e of entities) {
     if (e.kind === 'line') {
       out.push({ id: e.id, type: 'segment', a: e.start, b: e.end });
     } else if (e.kind === 'wall') {
-      const strokes = wallEntityStrokes(e, 32);
+      const punched = openings.some((o) => o.hostId === e.id);
+      const strokes = clipWallStrokes(e, wallEntityStrokes(e, 32, unit), openings);
       for (let i = 0; i < strokes.length; i++) {
         const pts = strokes[i]!.points;
         if (pts.length < 2) continue;
         if (e.path === 'line' && pts.length === 2) {
           out.push({ id: `${e.id}#${i}`, type: 'segment', a: pts[0]!, b: pts[1]! });
         } else if (
+          !punched &&
           e.path === 'arc' &&
           e.center &&
           e.radius != null &&
@@ -266,8 +273,10 @@ export function snapAt(
   click: Vec3,
   curves: readonly SnapCurve[],
   maxDist: number,
+  unit: UnitId = 'm',
 ): SnapResult | null {
   if (curves.length === 0 || maxDist <= 0) return null;
+  const merge = metersToDoc(ENDPOINT_MERGE, unit);
 
   const candidates: SnapResult[] = [];
 
@@ -280,7 +289,7 @@ export function snapAt(
     for (let j = i + 1; j < curves.length; j++) {
       const ca = curves[i]!;
       const cb = curves[j]!;
-      const pts = curveIntersections(ca, cb);
+      const pts = curveIntersections(ca, cb, merge);
       for (const p of pts) {
         const d = dist(p, click);
         if (d <= ixRadius) {
@@ -304,14 +313,14 @@ export function snapAt(
 
   // ── 3) Point le plus proche sur chaque courbe ───────────────────────────
   for (const c of curves) {
-    const near = closestOnCurve(c, click);
+    const near = closestOnCurve(c, click, merge);
     if (!near) continue;
     if (near.dist > maxDist) continue;
     // Déjà couvert comme extrémité → ne pas doubler en nearest
     if (near.kind === 'endpoint') continue;
     // Pied quasi confondu avec une extrémité déjà candidate
     const onEndpoint = curveEndpoints(c).some(
-      (ep) => dist(near.point, ep) <= ENDPOINT_MERGE,
+      (ep) => dist(near.point, ep) <= merge,
     );
     if (onEndpoint) continue;
     candidates.push(makeResult(near.point, 'nearest', near.dist, [c.id]));
@@ -372,21 +381,23 @@ function makeResult(
 function closestOnCurve(
   c: SnapCurve,
   click: Vec3,
+  merge: number = ENDPOINT_MERGE,
 ): { point: Vec3; dist: number; kind: SnapKind } | null {
   if (c.type === 'infinite') {
     const r = closestPointOnInfiniteLine(c.origin, c.direction, click);
     return { point: r.point, dist: r.dist, kind: 'nearest' };
   }
   if (c.type === 'segment') {
-    return closestOnSegment(c.a, c.b, click);
+    return closestOnSegment(c.a, c.b, click, merge);
   }
-  return closestOnArc(c, click);
+  return closestOnArc(c, click, merge);
 }
 
 function closestOnSegment(
   a: Vec3,
   b: Vec3,
   click: Vec3,
+  merge: number = ENDPOINT_MERGE,
 ): { point: Vec3; dist: number; kind: SnapKind } {
   const ab = sub(b, a);
   const L2 = dot(ab, ab);
@@ -406,14 +417,15 @@ function closestOnSegment(
   // Tolérance extrémité : si très proche d'un bout, marquer endpoint
   const dA = dist(p, a);
   const dB = dist(p, b);
-  if (dA <= ENDPOINT_MERGE) kind = 'endpoint';
-  if (dB <= ENDPOINT_MERGE) kind = 'endpoint';
+  if (dA <= merge) kind = 'endpoint';
+  if (dB <= merge) kind = 'endpoint';
   return { point: p, dist: dist(p, click), kind };
 }
 
 function closestOnArc(
   c: Extract<SnapCurve, { type: 'arc' }>,
   click: Vec3,
+  merge: number = ENDPOINT_MERGE,
 ): { point: Vec3; dist: number; kind: SnapKind } | null {
   if (c.radius < EPS) return null;
   const cx = c.center[0];
@@ -432,7 +444,7 @@ function closestOnArc(
     // Extrémités d'arc
     const p0 = arcPoint(c, c.startAngle);
     const p1 = arcPoint(c, c.endAngle);
-    if (dist(p, p0) <= ENDPOINT_MERGE || dist(p, p1) <= ENDPOINT_MERGE) {
+    if (dist(p, p0) <= merge || dist(p, p1) <= merge) {
       const closer = dist(click, p0) <= dist(click, p1) ? p0 : p1;
       return { point: closer, dist: dist(closer, click), kind: 'endpoint' };
     }
@@ -485,13 +497,17 @@ function normalizeAngle(a: number): number {
 
 // —— Intersections ——
 
-function curveIntersections(a: SnapCurve, b: SnapCurve): Vec3[] {
+function curveIntersections(
+  a: SnapCurve,
+  b: SnapCurve,
+  merge: number = ENDPOINT_MERGE,
+): Vec3[] {
   const pts: Vec3[] = [];
 
   // Extrémités quasi confondues
   for (const pa of curveEndpoints(a)) {
     for (const pb of curveEndpoints(b)) {
-      if (dist(pa, pb) <= ENDPOINT_MERGE) {
+      if (dist(pa, pb) <= merge) {
         pts.push([
           (pa[0] + pb[0]) / 2,
           (pa[1] + pb[1]) / 2,
@@ -509,7 +525,7 @@ function curveIntersections(a: SnapCurve, b: SnapCurve): Vec3[] {
   } else if (a.type === 'segment' && b.type === 'infinite') {
     pts.push(...infiniteSegIx(b.origin, b.direction, a.a, a.b));
   } else if (a.type === 'segment' && b.type === 'segment') {
-    const p = segmentSegmentIx(a.a, a.b, b.a, b.b);
+    const p = segmentSegmentIx(a.a, a.b, b.a, b.b, merge);
     if (p) pts.push(p);
   } else if (a.type === 'infinite' && b.type === 'arc') {
     pts.push(...infiniteArcIx(a.origin, a.direction, b));
@@ -568,7 +584,13 @@ function infiniteSegIx(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3): Vec3[] 
  * Formule standard paramétrique robuste + secours si le croisement
  * est numériquement juste hors [0,1] mais quasi sur les deux segments.
  */
-function segmentSegmentIx(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3): Vec3 | null {
+function segmentSegmentIx(
+  a0: Vec3,
+  a1: Vec3,
+  b0: Vec3,
+  b1: Vec3,
+  merge: number = ENDPOINT_MERGE,
+): Vec3 | null {
   const ax = a0[0];
   const ay = a0[1];
   const adx = a1[0] - a0[0];
@@ -599,7 +621,7 @@ function segmentSegmentIx(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3): Vec3 | null {
   if (!pInf) return null;
   const da = distPointToSegment(pInf, a0, a1);
   const db = distPointToSegment(pInf, b0, b1);
-  if (da <= ENDPOINT_MERGE && db <= ENDPOINT_MERGE) {
+  if (da <= merge && db <= merge) {
     return [pInf[0], pInf[1], a0[2]];
   }
   return null;
