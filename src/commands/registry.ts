@@ -1671,9 +1671,13 @@ const commands: CommandDef[] = [
         ctx.feedback(`Calque invalide ${n}.`, 'err');
         return;
       }
+      const hiddenTarget = isPositiveDrawLayer(n) && !ctx.layers.resolved(n).visible;
       const count = ctx.doc.assignDrawLayer(ctx.selection.selectedIds, n);
+      ctx.layers.dropHiddenPicks();
       ctx.feedback(
-        `${count} élément(s) → calque ${n}  ${ctx.layers.label(n)}.`,
+        hiddenTarget
+          ? `${count} élément(s) → calque ${n} (masqué : retirés de la sélection et de la désignation).`
+          : `${count} élément(s) → calque ${n}  ${ctx.layers.label(n)}.`,
         count > 0 ? 'ok' : 'warn',
       );
     },

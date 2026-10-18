@@ -1,7 +1,7 @@
 /**
  * Emplacements de sélection (session) :
  *   Shift+F1…F12 → mémoriser la sélection courante (liste d’ids)
- *   Alt+F1…F12   → rappeler la sélection (ids encore présents dans le doc)
+ *   Alt+F1…F12   → rappeler la sélection (ids encore présents, calque visible)
  */
 
 const SLOT_MIN = 1;

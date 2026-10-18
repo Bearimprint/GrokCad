@@ -1,9 +1,12 @@
 /**
  * Attributs de calque, DuCalque, visibilité, sélection par calque.
  */
+import { executeLine, type CommandContext } from '../src/commands/registry.ts';
+import { DesignationManager } from '../src/core/designation.ts';
 import { CadDocument } from '../src/core/document.ts';
 import {
   applyLayerEdit,
+  DrawLayerManager,
   effectiveStroke,
   effectiveTextStyle,
   entitiesOnVisibleLayers,
@@ -16,7 +19,7 @@ import {
   withLayerPatch,
 } from '../src/core/drawLayers.ts';
 import { defaultCamera, parseGkd, serializeGkd } from '../src/core/gkd.ts';
-import { entitiesInAabb } from '../src/core/selection.ts';
+import { entitiesInAabb, SelectionManager } from '../src/core/selection.ts';
 import { entitiesToSnapCurves } from '../src/core/snap.ts';
 import type { LineEntity, TextEntity } from '../src/core/types.ts';
 
@@ -167,5 +170,92 @@ assert(layer2?.color === '#ff0000', `couleur sauvée (${layer2?.color})`);
 assert(layer2?.visible === false, 'masquage sauvé');
 const keptColor = round.entities.find((e) => e.id === 'old' || e.id === 'keep');
 assert(keptColor && 'color' in keptColor && keptColor.color === '#112233', 'couleur entité inchangée au roundtrip');
+
+function lineOn(id: string, layer: number): LineEntity {
+  return {
+    id,
+    kind: 'line',
+    layer: 'DESSIN',
+    drawLayer: layer,
+    start: [0, 0, 0],
+    end: [1, 0, 0],
+    color: '#ffffff',
+    lineWidth: 1,
+    lineStyle: 'plein',
+  };
+}
+
+function commandCtx(
+  doc: CadDocument,
+  selection: SelectionManager,
+  layers: DrawLayerManager,
+): CommandContext {
+  return {
+    doc,
+    selection,
+    layers,
+    tools: { isActive: false },
+    viewport: { clearSnap() {} },
+    feedback() {},
+  } as unknown as CommandContext;
+}
+
+const hiddenDoc = new CadDocument();
+hiddenDoc.addEntity(lineOn('hid', 3));
+hiddenDoc.addEntity(lineOn('vis', 1));
+const hiddenSel = new SelectionManager();
+const hiddenDes = new DesignationManager();
+hiddenSel.set(['hid', 'vis']);
+hiddenDes.set(['hid', 'vis']);
+const hiddenLayers = new DrawLayerManager(hiddenDoc);
+hiddenLayers.bindPicks(hiddenSel, hiddenDes);
+const hiddenCtx = commandCtx(hiddenDoc, hiddenSel, hiddenLayers);
+await executeLine('/calques masquer 3', hiddenCtx);
+assert(hiddenDoc.entities.some((e) => e.id === 'hid'), 'masquer n’efface pas');
+assert(!hiddenSel.has('hid') && hiddenSel.has('vis'), 'masquer retire seulement le calque masqué');
+assert(!hiddenDes.has('hid') && hiddenDes.has('vis'), 'désignation retire le calque masqué');
+await executeLine('/delete', hiddenCtx);
+assert(hiddenDoc.entities.some((e) => e.id === 'hid'), '/delete n’efface rien sur le calque masqué');
+assert(!hiddenDoc.entities.some((e) => e.id === 'vis'), '/delete efface encore la sélection visible');
+
+const boxDoc = new CadDocument();
+boxDoc.addEntity(lineOn('box', 4));
+const boxSel = new SelectionManager();
+const boxDes = new DesignationManager();
+boxSel.set(['box']);
+boxDes.set(['box']);
+const boxLayers = new DrawLayerManager(boxDoc);
+boxLayers.bindPicks(boxSel, boxDes);
+const boxHide = boxLayers.setVisible(4, false);
+assert(boxHide.ok, boxHide.message);
+assert(!boxSel.has('box') && !boxDes.has('box'), 'case du dialogue retire sélection et désignation');
+
+const isoDoc = new CadDocument();
+isoDoc.addEntity(lineOn('other', 5));
+isoDoc.addEntity(lineOn('cur', 1));
+const isoSel = new SelectionManager();
+const isoDes = new DesignationManager();
+isoSel.set(['other', 'cur']);
+isoDes.set(['other', 'cur']);
+const isoLayers = new DrawLayerManager(isoDoc);
+isoLayers.bindPicks(isoSel, isoDes);
+await executeLine('/calques isoler 4', commandCtx(isoDoc, isoSel, isoLayers));
+assert(!isoSel.has('other') && !isoDes.has('other'), 'isoler retire les calques masqués');
+assert(isoSel.has('cur') && isoDes.has('cur'), 'isoler garde le calque courant');
+
+const moveDoc = new CadDocument();
+moveDoc.setDrawLayers(withLayerPatch([], 6, { visible: false }));
+moveDoc.addEntity(lineOn('moved', 1));
+const moveSel = new SelectionManager();
+const moveDes = new DesignationManager();
+moveSel.set(['moved']);
+moveDes.set(['moved']);
+const moveLayers = new DrawLayerManager(moveDoc);
+moveLayers.bindPicks(moveSel, moveDes);
+await executeLine('/verscalque 6', commandCtx(moveDoc, moveSel, moveLayers));
+assert(moveDoc.entities.find((e) => e.id === 'moved')?.drawLayer === 6, 'verscalque vers 6');
+assert(!moveSel.has('moved') && !moveDes.has('moved'), 'verscalque masqué retire sélection et désignation');
+await executeLine('/delete', commandCtx(moveDoc, moveSel, moveLayers));
+assert(moveDoc.entities.some((e) => e.id === 'moved'), '/delete après verscalque masqué n’efface rien');
 
 console.log('OK layer style');

@@ -1,7 +1,7 @@
 import { executeLine, type CommandContext, type FeedbackLevel } from '../commands/registry';
 import type { AppPrefsManager } from '../core/appPrefs';
 import type { DimPrefsManager } from '../core/dimPrefs';
-import type { DrawLayerManager } from '../core/drawLayers';
+import { entitiesOnVisibleLayers, type DrawLayerManager } from '../core/drawLayers';
 import type { CadDocument } from '../core/document';
 import type { PenManager } from '../core/penPrefs';
 import type { SelectionManager } from '../core/selection';
@@ -200,13 +200,21 @@ export class CommandBar {
         }
         if (e.altKey && !e.shiftKey) {
           e.preventDefault();
-          const live = new Set(doc.entities.map((ent) => ent.id));
-          const ids = selectionSlots.restore(slot, live);
+          const visible = new Set(
+            entitiesOnVisibleLayers(doc.entities, doc.drawLayerLabels).map((ent) => ent.id),
+          );
+          const ids = selectionSlots.restore(slot, visible);
           if (ids.length === 0) {
+            const inDoc = selectionSlots.restore(
+              slot,
+              doc.entities.map((ent) => ent.id),
+            );
             this.setFeedback(
-              selectionSlots.has(slot)
-                ? `F${slot} : aucun des éléments mémorisés n’est encore dans le dessin.`
-                : `F${slot} : aucune sélection mémorisée (Shift+F${slot} d’abord).`,
+              inDoc.length > 0
+                ? `F${slot} : les éléments mémorisés sont sur un calque masqué.`
+                : selectionSlots.has(slot)
+                  ? `F${slot} : aucun des éléments mémorisés n’est encore dans le dessin.`
+                  : `F${slot} : aucune sélection mémorisée (Shift+F${slot} d’abord).`,
               'warn',
             );
             return;

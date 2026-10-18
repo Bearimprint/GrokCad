@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.25.5**  
+> Version de référence : **0.25.6**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -176,7 +176,7 @@ Détails : `WALLS.md` · `JONCTION.md`.
 | `/delete` | `/del` `/effacer` `/erase` | Efface la sélection (**Suppr**) |
 | `/d` | `/delpick` · **Ctrl+D** | Efface l’élément au clic ; enchaîne jusqu’à Échap |
 | `/copy` | `/cp` `/copier` | Sans sél. : désigner → coller (enchaîne). Avec sél. : base → arrivée. **[Shift]** = H/45°/V |
-| Slots | **Shift+F1…F12** / **Alt+F1…F12** | Mémorise / rappelle une sélection (session) |
+| Slots | **Shift+F1…F12** / **Alt+F1…F12** | Mémorise / rappelle une sélection (session). Alt+F ne rappelle pas un calque masqué |
 
 ---
 
@@ -188,7 +188,7 @@ Chaque calque a un **libellé de 255 caractères** max. Défaut : `Couche numero
 
 Attributs de chaque calque normal (1–127), défauts identiques : couleur **blanche**, épaisseur **1 px**, trait **plein**, police **Tahoma** (ni gras ni italique), **visible**. Un objet sans choix explicite de stylo ou de texte suit son calque (**DuCalque**). `/couleur`, `/epaisseur`, `/style` ou la barre de styles figent cet attribut. Les calques négatifs d’insertion ne changent pas.
 
-Un calque masqué n’est ni dessiné, ni accroché, ni sélectionnable. Rien n’est effacé. Le **calque courant ne peut pas être masqué**.
+Un calque masqué n’est ni dessiné, ni accroché, ni sélectionnable. Rien n’est effacé. Le **calque courant ne peut pas être masqué**. Masquer, isoler, décocher la case du dialogue, ou `/verscalque` vers un calque masqué retire ces éléments de la sélection et de la désignation : `/delete` ne les efface pas. **Alt+F1…F12** ne rappelle que les éléments d’un calque visible.
 
 | Commande | Alias | Description |
 |----------|-------|-------------|
@@ -326,9 +326,9 @@ Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge 
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.25.5
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.6
 ```
 
 ---
 
-*GrokCAD v0.25.5 — aide commandes*
+*GrokCAD v0.25.6 — aide commandes*

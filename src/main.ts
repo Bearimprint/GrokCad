@@ -104,6 +104,7 @@ const wallLib = new WallLibraryDialog(walls, pen);
 const objLib = new ObjectLibraryDialog();
 const hatchLib = new HatchLibraryDialog(hatch);
 const layers = new DrawLayerManager(doc);
+layers.bindPicks(selection, designation);
 const layersDialog = new LayersDialog(layers);
 
 new StyleBar(styleBarRoot, pen, textPrefs, dimPrefs, dimStyles, layers, layersDialog);

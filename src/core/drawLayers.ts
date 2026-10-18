@@ -18,9 +18,15 @@ import type {
 } from './types';
 
 /** Surface minimale du document pour le gestionnaire de calques (évite un import circulaire). */
+/** Sélection ou désignation : on n’y retire que des ids. */
+export interface PickIdBag {
+  remove(ids: Iterable<string>): void;
+}
+
 export interface DrawLayerDoc {
   currentDrawLayer: number;
   drawLayerLabels: readonly DrawLayerLabel[];
+  readonly entities: readonly { id: string; drawLayer?: number }[];
   setCurrentDrawLayer(id: number): void;
   setDrawLayerLabel(id: number, label: string): void;
   patchDrawLayer(id: number, patch: LayerPatch): void;
@@ -781,6 +787,7 @@ export class DrawLayerManager {
   private insertLayerId = INSERT_LAYER_MAX; // −1
   private standardLayerId = DEFAULT_DRAW_LAYER;
   private listeners = new Set<DrawLayerListener>();
+  private pickBags: PickIdBag[] = [];
 
   constructor(private doc: DrawLayerDoc) {
     const cur = this.doc.currentDrawLayer;
@@ -888,9 +895,25 @@ export class DrawLayerManager {
     return { ok: edit.ok, message: edit.message };
   }
 
+  /** Sélection et désignation : un calque masqué n’y reste pas. */
+  bindPicks(...bags: PickIdBag[]): void {
+    this.pickBags = bags;
+  }
+
+  /** Retire les entités dont le calque est masqué. */
+  dropHiddenPicks(): void {
+    if (this.pickBags.length === 0) return;
+    const hidden = this.doc.entities
+      .filter((e) => !entityLayerVisible(e, this.table))
+      .map((e) => e.id);
+    if (hidden.length === 0) return;
+    for (const bag of this.pickBags) bag.remove(hidden);
+  }
+
   applyEdit(edit: LayerEdit): LayerEditResult {
     const result = applyLayerEdit(this.table, this.current, edit);
     this.doc.setDrawLayers(result.table);
+    this.dropHiddenPicks();
     this.emit();
     return result;
   }

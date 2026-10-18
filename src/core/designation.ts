@@ -49,6 +49,14 @@ export class DesignationManager {
     this.emit();
   }
 
+  remove(ids: Iterable<string>): void {
+    let changed = false;
+    for (const id of ids) {
+      if (this.ids.delete(id)) changed = true;
+    }
+    if (changed) this.emit();
+  }
+
   designatedEntities(entities: readonly Entity[]): Entity[] {
     return entities.filter((e) => this.ids.has(e.id));
   }

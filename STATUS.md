@@ -6,19 +6,25 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.25.5**
+**Version courante : 0.25.6**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.25.5
+# → http://localhost:5173/  ·  titre GrokCad v.0.25.6
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-18 — correctif calques masqués (→ **0.25.6**)
+
+- Masquer, isoler, la case du dialogue, ou `/verscalque` vers un calque masqué retire ces éléments de la sélection et de la désignation. `/delete` ne les efface pas.
+- **Alt+F1…F12** filtre le rappel avec `entitiesOnVisibleLayers`.
+- Test : `scripts/test-layer-style.mts`.
 
 ## Session 2026-10-17 — Étape 1, calques complets (→ **0.25.5**)
 
@@ -341,6 +347,7 @@ Coins **L** : `resolveStarNodeStrokes` / offset polyligne (inchangé pour L pur)
 | `/grid` on\|off · `/gridsnap` on\|off | **fait** | **0.24.16** |
 | Étape 0 — tolérances, unités, DXF, découpe outils | **fait** | **0.25.4** |
 | Étape 1 — calques (attributs, DuCalque, visibilité, /selcalque) | **fait** | **0.25.5** |
+| Correctif — sélection / désignation quittent un calque masqué | **fait** | **0.25.6** |
 | `/join` + `/jonction` Y : BIM priorités (béton↔béton, isolant stop net) | **OK** | **0.24.10** |
 | `/jonction` T/Y multi-extrémités (cadre) | partiel | 0.18.x |
 | `/extrude` · Undo | pas commencé | — |
