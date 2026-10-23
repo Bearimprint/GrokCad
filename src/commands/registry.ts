@@ -7,6 +7,7 @@ import {
   hasInsertLayers,
   INSERTION_CATEGORY_LABELS,
   INSERTIONS_TAB,
+  insertionTab,
   interpretLayerArgs,
   isDrawLayerId,
   isInsertionsTab,
@@ -42,7 +43,7 @@ import {
 } from '../core/fsClient';
 import { downloadGkd, parseGkd, serializeGkd } from '../core/gkd';
 import { objectDefCache } from '../core/objectCache';
-import { saveLibraryObject } from '../core/objectLibrary';
+import { loadLibraryObject, saveLibraryObject } from '../core/objectLibrary';
 import {
   createAxesHelpers,
   helperParallelX,
@@ -930,7 +931,8 @@ const commands: CommandDef[] = [
   {
     name: 'arccont',
     aliases: ['ac', 'arccontinu'],
-    summary: 'Arcs continus (G1) : 1er arc 3 pts puis suite sans cassure',
+    summary:
+      'Arcs continus sans cassure : 1er arc 3 pts puis suite tangente, une seule polyligne',
     usage: 'interactif',
     run: (ctx, args) => {
       if (args.length > 0) {
@@ -1773,6 +1775,67 @@ const commands: CommandDef[] = [
       await openInsertLibrary(ctx, 'others', false);
     },
   },
+  {
+    name: 'porte',
+    aliases: ['door', 'porte1'],
+    summary:
+      'Pose une porte dans un mur : trou + battant. Souris = largeur, ou dx 0.9. [ALT] côté, [CTRL] miroir.',
+    run: async (ctx) => {
+      await startNamedInsert(ctx, 'doors', 'porte');
+    },
+  },
+  {
+    name: 'portedouble',
+    aliases: ['porte2', 'door2', 'doubledoor'],
+    summary: 'Porte à deux vantaux dans un mur (largeur totale = souris ou dx).',
+    run: async (ctx) => {
+      await startNamedInsert(ctx, 'doors', 'porte_double');
+    },
+  },
+  {
+    name: 'fenetre',
+    aliases: ['fenêtre', 'window', 'fen'],
+    summary:
+      'Pose une fenêtre dans un mur (vitrage + trou). Souris = largeur, ou dx 1.2.',
+    run: async (ctx) => {
+      await startNamedInsert(ctx, 'windows', 'fenetre');
+    },
+  },
+  {
+    name: 'fenetredouble',
+    aliases: ['fenêtre2', 'fen2', 'window2'],
+    summary: 'Fenêtre à deux travées (meneau au milieu) dans un mur.',
+    run: async (ctx) => {
+      await startNamedInsert(ctx, 'windows', 'fenetre_double');
+    },
+  },
+  {
+    name: 'mc',
+    aliases: ['calquecourant', 'laycur', 'laymcur'],
+    summary: 'Le calque de l’élément cliqué devient le calque courant',
+    run: (ctx) => {
+      ctx.tools.cancel(false);
+      ctx.tools.startMakeLayerCurrent();
+    },
+  },
+  {
+    name: 'undo',
+    aliases: ['u', 'annuler'],
+    summary: 'Annule la dernière modification du dessin (Ctrl+Z)',
+    run: (ctx) => {
+      if (!ctx.doc.undo()) ctx.feedback('Rien à annuler.', 'warn');
+      else ctx.feedback('Annulé.', 'ok');
+    },
+  },
+  {
+    name: 'redo',
+    aliases: ['retablir', 'rétablir'],
+    summary: 'Rétablit une annulation (Ctrl+Y ou Ctrl+Shift+Z)',
+    run: (ctx) => {
+      if (!ctx.doc.redo()) ctx.feedback('Rien à rétablir.', 'warn');
+      else ctx.feedback('Rétabli.', 'ok');
+    },
+  },
 
   // —— Stylo ——
   {
@@ -2440,6 +2503,31 @@ function parseHelperAxisPoint(
  * - forceDialog=false : si filePath connu → écrit direct (Ctrl+S) ; sinon dialogue.
  * - forceDialog=true  : toujours dialogue ; le chemin choisi devient le défaut.
  */
+async function startNamedInsert(
+  ctx: CommandContext,
+  category: InsertCategory,
+  name: string,
+): Promise<void> {
+  ctx.tools.cancel(false);
+  const tab = insertionTab(category);
+  const doc = await loadLibraryObject(tab, name);
+  if (!doc || !hasAnchorPoint(doc.entities)) {
+    ctx.feedback(
+      `Objet « ${name} » introuvable dans library/${tab}/. Ouverture de la bibliothèque.`,
+      'warn',
+    );
+    await openInsertLibrary(ctx, category, true);
+    return;
+  }
+  objectDefCache.set(tab, name, doc);
+  ctx.tools.startInsertInHost(tab, name);
+  const kind = category === 'doors' ? 'porte' : 'fenêtre';
+  ctx.feedback(
+    `${kind} « ${name} » — désignez le mur. La largeur suit la souris (près de l’ancre = largeur par défaut, /param). dx 0.9 valide. [ALT] côté · [CTRL] miroir.`,
+    'info',
+  );
+}
+
 async function openInsertLibrary(
   ctx: CommandContext,
   category: InsertCategory,

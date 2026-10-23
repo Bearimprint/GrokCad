@@ -56,6 +56,10 @@ export interface AppPrefsFile {
    * pendant la création / modification d’un objet d’insertion.
    */
   insertLayerRailSide?: InsertLayerRailSide;
+  /** Largeur par défaut d’une porte, en mètres réels. */
+  doorWidthMeters?: number;
+  /** Largeur par défaut d’une fenêtre, en mètres réels. */
+  windowWidthMeters?: number;
 }
 
 /** Entrée de l’historique fichiers (/openlast). */
@@ -67,6 +71,8 @@ export interface RecentFileEntry {
 export const RECENT_FILES_MAX = 7;
 
 export const APP_STORAGE_KEY = 'grokcad.app';
+export const DEFAULT_DOOR_WIDTH_METERS = 0.9;
+export const DEFAULT_WINDOW_WIDTH_METERS = 1.2;
 export const DEFAULT_SNAP_RADIUS_PX = 20;
 
 /** Message `/gridsnap on` alors que la grille est cachée (texte demandé). */
@@ -86,6 +92,8 @@ export function defaultAppPrefs(): AppPrefsFile {
     gridSnap: false,
     gridOffDisablesSnap: true,
     insertLayerRailSide: 'left',
+    doorWidthMeters: DEFAULT_DOOR_WIDTH_METERS,
+    windowWidthMeters: DEFAULT_WINDOW_WIDTH_METERS,
   };
 }
 
@@ -138,6 +146,20 @@ function normalize(raw: unknown): AppPrefsFile {
   }
   if (o.insertLayerRailSide === 'left' || o.insertLayerRailSide === 'right') {
     base.insertLayerRailSide = o.insertLayerRailSide;
+  }
+  if (
+    typeof o.doorWidthMeters === 'number' &&
+    Number.isFinite(o.doorWidthMeters) &&
+    o.doorWidthMeters > 0
+  ) {
+    base.doorWidthMeters = o.doorWidthMeters;
+  }
+  if (
+    typeof o.windowWidthMeters === 'number' &&
+    Number.isFinite(o.windowWidthMeters) &&
+    o.windowWidthMeters > 0
+  ) {
+    base.windowWidthMeters = o.windowWidthMeters;
   }
   return base;
 }
@@ -249,6 +271,28 @@ export class AppPrefsManager {
 
   get insertLayerRailSide(): InsertLayerRailSide {
     return this.prefs.insertLayerRailSide === 'right' ? 'right' : 'left';
+  }
+
+  get doorWidthMeters(): number {
+    const n = this.prefs.doorWidthMeters;
+    return typeof n === 'number' && n > 0 ? n : DEFAULT_DOOR_WIDTH_METERS;
+  }
+
+  get windowWidthMeters(): number {
+    const n = this.prefs.windowWidthMeters;
+    return typeof n === 'number' && n > 0 ? n : DEFAULT_WINDOW_WIDTH_METERS;
+  }
+
+  setDoorWidthMeters(meters: number): void {
+    if (!Number.isFinite(meters) || meters <= 0) return;
+    this.prefs.doorWidthMeters = meters;
+    this.emit();
+  }
+
+  setWindowWidthMeters(meters: number): void {
+    if (!Number.isFinite(meters) || meters <= 0) return;
+    this.prefs.windowWidthMeters = meters;
+    this.emit();
   }
 
   setInsertLayerRailSide(side: InsertLayerRailSide): void {

@@ -13,7 +13,8 @@ import {
   type StretchAxes,
 } from './drawLayers';
 import { add, scale as vscale } from './geometry';
-import type { Entity, InsertPlacement, Vec3 } from './types';
+import { arcFrom3Points } from './drawing';
+import type { ArcEntity, CircleEntity, Entity, InsertPlacement, PolylineArcSeg, Vec3 } from './types';
 
 export interface InsertFrame {
   origin: Vec3;
@@ -71,6 +72,15 @@ function localOf(
 ): { lx: number; ly: number; world: Vec3; cutter: boolean } {
   const rel: Vec3 = [p[0] - anchor[0], p[1] - anchor[1], p[2] - anchor[2]];
   const force = frame.forceXY === true;
+  if (axes.swing && !force) {
+    const lx = rel[0] * frame.scaleX;
+    const ly = rel[1] * frame.scaleX;
+    const world = add(
+      add(frame.origin, vscale(frame.axisX, lx)),
+      add(vscale(frame.axisY, ly), [0, 0, rel[2]]),
+    );
+    return { lx, ly, world, cutter: false };
+  }
   const sx = axes.x || force;
   const sy = axes.y || force;
   const lx = sx ? rel[0] * frame.scaleX : rel[0];
@@ -102,15 +112,93 @@ function definitionPoints(e: Entity): Vec3[] {
   return [];
 }
 
-function mapEntity(e: Entity, map: (p: Vec3) => Vec3): Entity {
+function pointOnCircle(center: Vec3, radius: number, angle: number): Vec3 {
+  return [
+    center[0] + radius * Math.cos(angle),
+    center[1] + radius * Math.sin(angle),
+    center[2],
+  ];
+}
+
+/** Remet un arc circulaire après rotation / échelle uniforme du cadre. */
+function mapArc(e: ArcEntity, map: (p: Vec3) => Vec3): ArcEntity {
+  const start = map(pointOnCircle(e.center, e.radius, e.startAngle));
+  const mid = map(pointOnCircle(e.center, e.radius, (e.startAngle + e.endAngle) / 2));
+  const end = map(pointOnCircle(e.center, e.radius, e.endAngle));
+  const rebuilt = arcFrom3Points(start, mid, end, {
+    id: e.id,
+    layer: e.layer,
+    color: e.color,
+    lineWidth: e.lineWidth,
+    lineStyle: e.lineStyle,
+    ...(e.byLayer ? { byLayer: e.byLayer } : {}),
+  });
+  if (!rebuilt) {
+    return { ...e, center: map(e.center) };
+  }
+  return {
+    ...rebuilt,
+    id: e.id,
+    layer: e.layer,
+    drawLayer: e.drawLayer,
+    byLayer: e.byLayer,
+  };
+}
+
+function mapArcSeg(s: PolylineArcSeg, map: (p: Vec3) => Vec3): PolylineArcSeg {
+  const asArc: ArcEntity = {
+    id: 'seg',
+    kind: 'arc',
+    layer: 'DESSIN',
+    center: s.center,
+    radius: s.radius,
+    startAngle: s.startAngle,
+    endAngle: s.endAngle,
+    normal: s.normal,
+    color: s.color,
+    lineWidth: s.lineWidth,
+    lineStyle: s.lineStyle,
+    ...(s.byLayer ? { byLayer: s.byLayer } : {}),
+  };
+  const mapped = mapArc(asArc, map);
+  return {
+    ...s,
+    center: mapped.center,
+    radius: mapped.radius,
+    startAngle: mapped.startAngle,
+    endAngle: mapped.endAngle,
+    normal: mapped.normal,
+  };
+}
+
+function mapCircle(e: CircleEntity, map: (p: Vec3) => Vec3, radiusScale: number): CircleEntity {
+  return {
+    ...e,
+    center: map(e.center),
+    radius: Math.max(1e-6, e.radius * radiusScale),
+  };
+}
+function radiusScaleOf(axes: StretchAxes, frame: InsertFrame): number {
+  if (axes.swing || frame.forceXY) return clampScale(frame.scaleX);
+  if (axes.x && !axes.y) return clampScale(frame.scaleX);
+  if (axes.y && !axes.x) return clampScale(frame.scaleY);
+  if (axes.x && axes.y) return clampScale(frame.scaleX);
+  return 1;
+}
+
+function mapEntity(
+  e: Entity,
+  map: (p: Vec3) => Vec3,
+  radiusScale: number,
+): Entity {
   if (e.kind === 'line') {
     return { ...e, start: map(e.start), end: map(e.end) };
   }
   if (e.kind === 'arc') {
-    return { ...e, center: map(e.center) };
+    return mapArc(e, map);
   }
   if (e.kind === 'circle') {
-    return { ...e, center: map(e.center) };
+    return mapCircle(e, map, radiusScale);
   }
   if (e.kind === 'point') {
     return { ...e, position: map(e.position) };
@@ -125,7 +213,7 @@ function mapEntity(e: Entity, map: (p: Vec3) => Vec3): Entity {
         if (s.type === 'line') {
           return { ...s, start: map(s.start), end: map(s.end) };
         }
-        return { ...s, center: map(s.center) };
+        return mapArcSeg(s, map);
       }),
     };
   }
@@ -135,6 +223,10 @@ function mapEntity(e: Entity, map: (p: Vec3) => Vec3): Entity {
       start: map(e.start),
       end: map(e.end),
       center: e.center ? map(e.center) : undefined,
+      radius:
+        e.radius !== undefined
+          ? Math.max(1e-6, e.radius * radiusScale)
+          : undefined,
       strokeGeom: e.strokeGeom?.map((g) => ({
         ...g,
         start: map(g.start),
@@ -144,7 +236,30 @@ function mapEntity(e: Entity, map: (p: Vec3) => Vec3): Entity {
         if (s.type === 'line') {
           return { ...s, start: map(s.start), end: map(s.end) };
         }
-        return { ...s, center: map(s.center) };
+        const mapped = mapArc(
+          {
+            id: 'wseg',
+            kind: 'arc',
+            layer: 'MURS',
+            center: s.center,
+            radius: s.radius,
+            startAngle: s.startAngle,
+            endAngle: s.endAngle,
+            normal: s.normal,
+            color: '#ffffff',
+            lineWidth: 1,
+            lineStyle: 'plein',
+          },
+          map,
+        );
+        return {
+          ...s,
+          center: mapped.center,
+          radius: mapped.radius,
+          startAngle: mapped.startAngle,
+          endAngle: mapped.endAngle,
+          normal: mapped.normal,
+        };
       }),
     };
   }
@@ -181,7 +296,11 @@ export function placeInsertEntities(
     const dl = entityDrawLayer(e);
     if (dl === ANCHOR_LAYER && !opts?.keepAnchor) continue;
     const axes = stretchAxesOf(dl);
-    const mapped = mapEntity(e, (p) => localOf(p, anchor, axes, fr).world);
+    const mapped = mapEntity(
+      e,
+      (p) => localOf(p, anchor, axes, fr).world,
+      radiusScaleOf(axes, fr),
+    );
     out.push(mapped);
   }
   return out;

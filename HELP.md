@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.25.6**  
+> Version de référence : **0.26.0**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -105,7 +105,7 @@ Point accroché réutilisable avec `@`. Souris courante : `.` (ou `m` / `souris`
 | `/ligne` | `/l` `/line` `/li` | Ligne chaînée. **Shift** = H/45°/V |
 | `/arcc` | `/acentre` `/arccen` | Arc depuis le centre |
 | `/arc` | `/a` | Arc 3 points |
-| `/arccont` | `/ac` `/arccontinu` | Arcs continus (tangente G1) |
+| `/arccont` | `/ac` `/arccontinu` | Arcs continus **sans cassure** : 1er arc 3 pts, puis suite tangente, **une seule polyligne** |
 | `/cercle` | `/c` `/circle` `/cir` | Cercle : centre → rayon |
 | `/point` | `/pt` `/points` | Point(s) |
 | `/cut` | `/coupe` `/break` `/scinder` | Coupe ligne/arc/cercle au clic |
@@ -202,6 +202,7 @@ Un calque masqué n’est ni dessiné, ni accroché, ni sélectionnable. Rien n�
 | `/calques police n Tahoma` | | Police des textes DuCalque |
 | `/calques nom n libellé` | | Libellé |
 | `/couche` | `/layer` `/calque` `/cl` | `[n°]` = calque courant, sans arg = dialogue. Les verbes ci-dessus marchent aussi |
+| `/mc` | `/calquecourant` `/laycur` | Clic sur un élément → son calque devient le calque courant |
 | `/selcalque` | `/layersel` `/sc` | Sélectionne les éléments **visibles** du ou des calques (`n`, `n m`, `5-10`) |
 | `/verscalque` | `/vers-calque` | Envoie la sélection sur le calque `n` |
 
@@ -239,6 +240,10 @@ Les parties étirables se dessinent à **1 m** sur l’axe concerné (échelle s
 | Commande | Alias utilisables | Description |
 |----------|-------------------|-------------|
 | `/iw` | `/insertinwall` `/iiw` `/insertin` | Pose un objet insertions **dans un mur / une ligne / un arc** |
+| `/porte` | `/door` `/porte1` | Porte simple : trou + battant. Souris = largeur, près de l’ancre = largeur **/param** (0,90 m). `dx 0.8` valide. **[ALT]** côté, **[CTRL]** miroir |
+| `/portedouble` | `/porte2` `/door2` | Porte deux vantaux (largeur = les deux) |
+| `/fenetre` | `/fenêtre` `/window` `/fen` | Fenêtre simple (vitrage + trou). Défaut 1,20 m |
+| `/fenetredouble` | `/fenêtre2` `/fen2` `/window2` | Fenêtre deux travées |
 | `/od` | `/opendoor` `/insertdoor` `/id` | Biblio insertions → onglet **Portes** (`library/insertions/doors/`) |
 | `/ow` | `/openwindow` `/insertwindow` | Biblio insertions → onglet **Fenêtres** (`library/insertions/windows/`) |
 | `/oo` | `/openother` `/insertother` `/io` | Biblio insertions → onglet **Autres** (`library/insertions/others/`) |
@@ -295,7 +300,9 @@ Clic barre d’état = suivante (clic droit = précédente). Prefs : `grokcad.pe
 | `/snap` | `/accroche` | `[px \| on \| off \| ?]` |
 | `/grid` | `/grille` | `on \| off` — affiche / masque la grille (écart = Paramètres, 1 u. = 1 m) |
 | `/gridsnap` | `/gsnap` | `on \| off` — accroche clic droit sur un nœud de grille. Impossible si `/grid off` |
-| `/param` | `/params` `/settings` `/prefs` | Fenêtre Paramètres |
+| `/param` | `/params` `/settings` `/prefs` | Fenêtre Paramètres (unités, grille, snap, largeurs porte/fenêtre, styles) |
+| `/undo` | `/u` `/annuler` | Annule la dernière modification (aussi Ctrl+Z) |
+| `/redo` | `/retablir` `/rétablir` | Rétablit (Ctrl+Y ou Ctrl+Shift+Z) |
 
 Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge gras). Clic = bascule. Si la grille est cachée, **Grid Snap OFF** est grisé et non cliquable. `/grid off` force l’affichage **Grid Snap OFF** grisé. Case Paramètres *« Grid Off désactive automatiquement le snap de la grille »* (cochée par défaut) : masquer la grille écrit aussi `gridsnap = off`.
 

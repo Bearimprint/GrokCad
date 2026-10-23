@@ -97,6 +97,7 @@ tools.setSelection(selection);
 tools.setDesignation(designation);
 tools.setTextPrefs(textPrefs);
 tools.setDimPrefs(dimPrefs);
+tools.setAppPrefs(app);
 
 const settings = new SettingsDialog(app, pen, textPrefs);
 const dimStyles = new DimStyleDialog(dimPrefs, pen);

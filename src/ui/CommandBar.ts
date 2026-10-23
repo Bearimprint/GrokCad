@@ -248,7 +248,34 @@ export class CommandBar {
         return;
       }
 
-      // Ctrl+S → /save (rapide si chemin connu, sinon dialogue)
+      // Ctrl+Z annule le dessin (sauf si une saisie est en cours).
+      // Ctrl+Shift+Z ou Ctrl+Y rétablit.
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')
+      ) {
+        const typing =
+          (tag === 'INPUT' || tag === 'TEXTAREA') &&
+          ((e.target as HTMLInputElement).value ?? '').length > 0;
+        const redo =
+          e.key === 'y' ||
+          e.key === 'Y' ||
+          ((e.key === 'z' || e.key === 'Z') && e.shiftKey);
+        if (typing && !redo && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (redo) {
+          const ok = doc.redo();
+          this.setFeedback(ok ? 'Rétabli.' : 'Rien à rétablir.', ok ? 'ok' : 'warn');
+        } else {
+          const ok = doc.undo();
+          this.setFeedback(ok ? 'Annulé.' : 'Rien à annuler.', ok ? 'ok' : 'warn');
+        }
+        return;
+      }
       if (
         (e.key === 's' || e.key === 'S') &&
         (e.ctrlKey || e.metaKey) &&

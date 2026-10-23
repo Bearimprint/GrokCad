@@ -121,6 +121,11 @@ export function measureOpening(entities: readonly Entity[]): OpeningMeasure {
     if (!consider(e)) continue;
     const axes = stretchAxesOf(entityDrawLayer(e));
     const rel = definitionPoints(e).map((p) => sub(p, anchor));
+    if (axes.swing) {
+      // Le battant suit la largeur : il ne définit ni l’épaisseur ni le trou.
+      anyStretch = true;
+      continue;
+    }
     if (axes.x || axes.y || axes.z) anyStretch = true;
     if (axes.x) {
       stretchAnyX = true;

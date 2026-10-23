@@ -6,19 +6,27 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.25.6**
+**Version courante : 0.26.0**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.25.6
+# → http://localhost:5173/  ·  titre GrokCad v.0.26.0
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-23 — portes, fenêtres, arcs continus, annuler (→ **0.26.0**)
+
+- **`/porte`** **`/portedouble`** **`/fenetre`** **`/fenetredouble`** : pose directe dans un mur. Trou sur l’épaisseur, battant (calque −10) qui suit la largeur et tourne avec le mur. **[ALT]** côté, **[CTRL]** miroir, souris ou `dx 0.9`. Près de l’ancre : largeur par défaut (**Paramètres**).
+- Symboles : `library/insertions/doors/porte.gkd`, `porte_double.gkd`, `windows/fenetre.gkd`, `fenetre_double.gkd`.
+- **`/arccont`** : une seule polyligne, continuité tangente, plus de cassure entre arcs séparés.
+- **`/undo`** **`/redo`** (Ctrl+Z, Ctrl+Y). **`/mc`** : calque courant = calque de l’élément cliqué.
+- Test : `scripts/test-openings.mts`.
 
 ## Session 2026-10-18 — correctif calques masqués (→ **0.25.6**)
 

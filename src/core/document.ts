@@ -45,6 +45,12 @@ export class CadDocument {
   private _dirty = false;
   private _lastHelperId: string | null = null;
   private listeners = new Set<() => void>();
+  /** Piles d’annulation (entités seulement). 80 pas. */
+  private undoStack: Entity[][] = [];
+  private redoStack: Entity[][] = [];
+  private historyDepth = 0;
+  private historyMute = 0;
+  private static readonly HISTORY_MAX = 80;
 
   constructor(doc?: GkdDocument, filename = 'Sans titre.gkd') {
     this._doc = doc ?? createEmptyDocument();
@@ -58,6 +64,71 @@ export class CadDocument {
 
   private emit(): void {
     for (const fn of this.listeners) fn();
+  }
+
+  private cloneEntities(src: readonly Entity[] = this._doc.entities): Entity[] {
+    return structuredClone(src) as Entity[];
+  }
+
+  /**
+   * Enregistre l’état courant une fois par opération (les appels imbriqués,
+   * ex. rejoin après un ajout de mur, ne créent pas un second pas).
+   */
+  private mutate(fn: () => void): void {
+    if (this.historyMute === 0 && this.historyDepth === 0) {
+      this.undoStack.push(this.cloneEntities());
+      if (this.undoStack.length > CadDocument.HISTORY_MAX) this.undoStack.shift();
+      this.redoStack.length = 0;
+    }
+    this.historyDepth += 1;
+    try {
+      fn();
+    } finally {
+      this.historyDepth = Math.max(0, this.historyDepth - 1);
+    }
+  }
+
+  get canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  get canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
+  /** Annule la dernière modification des entités. */
+  undo(): boolean {
+    const prev = this.undoStack.pop();
+    if (!prev) return false;
+    this.redoStack.push(this.cloneEntities());
+    this._doc.entities = prev;
+    this.touch();
+    this.emit();
+    return true;
+  }
+
+  /** Rétablit une annulation. */
+  redo(): boolean {
+    const next = this.redoStack.pop();
+    if (!next) return false;
+    this.undoStack.push(this.cloneEntities());
+    this._doc.entities = next;
+    this.touch();
+    this.emit();
+    return true;
+  }
+
+  /**
+   * Oublie le dernier pas (annulation d’un aperçu, ex. /jonction Échap).
+   * Ne change pas les entités courantes.
+   */
+  dropLastUndo(): void {
+    this.undoStack.pop();
+  }
+
+  private clearHistory(): void {
+    this.undoStack.length = 0;
+    this.redoStack.length = 0;
   }
 
   get raw(): GkdDocument {
@@ -169,18 +240,22 @@ export class CadDocument {
   }
 
   addHelper(helper: HelperLineEntity): void {
-    this._doc.entities.push(helper);
-    this._lastHelperId = helper.id;
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      this._doc.entities.push(helper);
+      this._lastHelperId = helper.id;
+      this.touch();
+      this.emit();
+    });
   }
 
   addHelpers(helpers: HelperLineEntity[]): void {
     if (helpers.length === 0) return;
-    this._doc.entities.push(...helpers);
-    this._lastHelperId = helpers[helpers.length - 1]!.id;
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      this._doc.entities.push(...helpers);
+      this._lastHelperId = helpers[helpers.length - 1]!.id;
+      this.touch();
+      this.emit();
+    });
   }
 
   get currentDrawLayer(): number {
@@ -240,14 +315,17 @@ export class CadDocument {
     const set = new Set(ids);
     if (set.size === 0) return 0;
     let n = 0;
-    this._doc.entities = this._doc.entities.map((e) => {
+    const next = this._doc.entities.map((e) => {
       if (!set.has(e.id)) return e;
       n += 1;
       return { ...e, drawLayer: layer };
     });
     if (n > 0) {
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = next;
+        this.touch();
+        this.emit();
+      });
     }
     return n;
   }
@@ -258,20 +336,24 @@ export class CadDocument {
   }
 
   addEntity(entity: Entity): void {
-    const e = this.stampDrawLayer(entity);
-    this._doc.entities.push(e);
-    if (e.kind === 'wall') this.rejoinWalls();
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      const e = this.stampDrawLayer(entity);
+      this._doc.entities.push(e);
+      if (e.kind === 'wall') this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
   }
 
   addEntities(entities: Entity[]): void {
     if (entities.length === 0) return;
-    const stamped = entities.map((e) => this.stampDrawLayer(e));
-    this._doc.entities.push(...stamped);
-    if (stamped.some((e) => e.kind === 'wall')) this.rejoinWalls();
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      const stamped = entities.map((e) => this.stampDrawLayer(e));
+      this._doc.entities.push(...stamped);
+      if (stamped.some((e) => e.kind === 'wall')) this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
   }
 
   /** Recalcule les onglets (miter) entre murs linéaires qui se touchent. */
@@ -305,36 +387,36 @@ export class CadDocument {
       }
     }
 
-    const before = this._doc.entities.length;
-    this._doc.entities = this._doc.entities
-      .filter((e) => !set.has(e.id))
-      .map((e) => {
-        // Texte libellé supprimé seul → cotation orpheline sans labelId
-        if (e.kind === 'dimension' && e.labelId && set.has(e.labelId)) {
-          return { ...e, labelId: undefined };
-        }
+    let n = 0;
+    this.mutate(() => {
+      const before = this._doc.entities.length;
+      this._doc.entities = this._doc.entities
+        .filter((e) => !set.has(e.id))
+        .map((e) => {
+          // Texte libellé supprimé seul → cotation orpheline sans labelId
+          if (e.kind === 'dimension' && e.labelId && set.has(e.labelId)) {
+            return { ...e, labelId: undefined };
+          }
+          return e;
+        });
+
+      this._doc.entities = this._doc.entities.map((e) => {
+        if (e.kind !== 'dimension' || !e.labelId) return e;
+        const stillThere = this._doc.entities.some((x) => x.id === e.labelId);
+        if (!stillThere) return { ...e, labelId: undefined };
         return e;
       });
-    // Re-filter in case we only cleared labelId on remaining dims
-    // (label already removed above if set had dim+label)
 
-    // Si on a supprimé un texte avec dimId, détacher la dim restante
-    this._doc.entities = this._doc.entities.map((e) => {
-      if (e.kind !== 'dimension' || !e.labelId) return e;
-      const stillThere = this._doc.entities.some((x) => x.id === e.labelId);
-      if (!stillThere) return { ...e, labelId: undefined };
-      return e;
-    });
-
-    const n = before - this._doc.entities.length;
-    if (n > 0 || set.size > 0) {
-      if (this._lastHelperId && set.has(this._lastHelperId)) {
-        this._lastHelperId = null;
+      n = before - this._doc.entities.length;
+      if (n > 0 || set.size > 0) {
+        if (this._lastHelperId && set.has(this._lastHelperId)) {
+          this._lastHelperId = null;
+        }
+        this.rejoinWalls();
+        this.touch();
+        this.emit();
       }
-      this.rejoinWalls();
-      this.touch();
-      this.emit();
-    }
+    });
     return n;
   }
 
@@ -351,15 +433,18 @@ export class CadDocument {
       }
     }
     let n = 0;
-    this._doc.entities = this._doc.entities.map((e) => {
+    const next = this._doc.entities.map((e) => {
       if (!set.has(e.id)) return e;
       n += 1;
       return translateEntity(e, dx, dy, dz);
     });
     if (n > 0) {
-      this.rejoinWalls();
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = next;
+        this.rejoinWalls();
+        this.touch();
+        this.emit();
+      });
     }
     return n;
   }
@@ -368,10 +453,12 @@ export class CadDocument {
   updateEntity(next: Entity): boolean {
     const idx = this._doc.entities.findIndex((e) => e.id === next.id);
     if (idx < 0) return false;
-    this._doc.entities[idx] = next;
-    this.rejoinWalls();
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      this._doc.entities[idx] = next;
+      this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
     return true;
   }
 
@@ -387,15 +474,18 @@ export class CadDocument {
       }
     }
     let n = 0;
-    this._doc.entities = this._doc.entities.map((e) => {
+    const next = this._doc.entities.map((e) => {
       if (!set.has(e.id)) return e;
       n += 1;
       return rotateEntityAround(e, pivot, angle);
     });
     if (n > 0) {
-      this.rejoinWalls();
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = next;
+        this.rejoinWalls();
+        this.touch();
+        this.emit();
+      });
     }
     return n;
   }
@@ -414,9 +504,11 @@ export class CadDocument {
       this.units,
     );
     if (changed > 0) {
-      this._doc.entities = entities;
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = entities;
+        this.touch();
+        this.emit();
+      });
     }
     return changed;
   }
@@ -446,21 +538,22 @@ export class CadDocument {
       strategy,
       this.units,
     );
-    if (result.wallsTouched > 0 || result.clusters > 0 || result.extended > 0) {
-      this._doc.entities = result.entities;
-      this.touch();
-      this.emit();
-    } else {
-      // Recalcul joints même sans snap (murs déjà collés)
-      this._doc.entities = applyWallJointsToEntities(
-        this._doc.entities,
-        undefined,
-        strategy,
-        this.units,
-      );
-      this.touch();
-      this.emit();
-    }
+    this.mutate(() => {
+      if (result.wallsTouched > 0 || result.clusters > 0 || result.extended > 0) {
+        this._doc.entities = result.entities;
+        this.touch();
+        this.emit();
+      } else {
+        this._doc.entities = applyWallJointsToEntities(
+          this._doc.entities,
+          undefined,
+          strategy,
+          this.units,
+        );
+        this.touch();
+        this.emit();
+      }
+    });
     return {
       wallsTouched: result.wallsTouched,
       clusters: result.clusters,
@@ -478,21 +571,25 @@ export class CadDocument {
    */
   replaceAllEntities(
     entities: readonly Entity[],
-    opts?: { rejoin?: boolean; strategy?: JonctionStrategyId },
+    opts?: { rejoin?: boolean; strategy?: JonctionStrategyId; history?: boolean },
   ): void {
-    const strategy = opts?.strategy ?? 'first-hit';
-    if (opts?.rejoin) {
-      this._doc.entities = applyWallJointsToEntities(
-        entities,
-        undefined,
-        strategy,
-        this.units,
-      );
-    } else {
-      this._doc.entities = entities.map((e) => ({ ...e })) as Entity[];
-    }
-    this.touch();
-    this.emit();
+    const apply = () => {
+      const strategy = opts?.strategy ?? 'first-hit';
+      if (opts?.rejoin) {
+        this._doc.entities = applyWallJointsToEntities(
+          entities,
+          undefined,
+          strategy,
+          this.units,
+        );
+      } else {
+        this._doc.entities = entities.map((e) => ({ ...e })) as Entity[];
+      }
+      this.touch();
+      this.emit();
+    };
+    if (opts?.history === false) apply();
+    else this.mutate(apply);
   }
 
   /** Copie les entités (nouveaux ids) décalées de (dx,dy,dz). */
@@ -507,10 +604,12 @@ export class CadDocument {
     const src = this._doc.entities.filter((e) => set.has(e.id));
     if (src.length === 0) return [];
     const copies = cloneAndTranslate(src, dx, dy, dz, this.units);
-    this._doc.entities.push(...copies);
-    this.rejoinWalls();
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      this._doc.entities.push(...copies);
+      this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
     return copies;
   }
 
@@ -521,40 +620,48 @@ export class CadDocument {
   replaceEntity(id: string, replacements: Entity[]): boolean {
     const idx = this._doc.entities.findIndex((e) => e.id === id);
     if (idx < 0) return false;
-    this._doc.entities.splice(idx, 1, ...replacements);
-    if (this._lastHelperId === id) this._lastHelperId = null;
-    this.rejoinWalls();
-    this.touch();
-    this.emit();
+    this.mutate(() => {
+      this._doc.entities.splice(idx, 1, ...replacements);
+      if (this._lastHelperId === id) this._lastHelperId = null;
+      this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
     return true;
   }
 
   /** Efface toutes les lignes d'aide d'un coup (grosse force d'ARC+). */
   clearHelpers(): number {
     const before = this._doc.entities.length;
-    this._doc.entities = this._doc.entities.filter((e) => e.kind !== 'helper');
-    const n = before - this._doc.entities.length;
-    this._lastHelperId = null;
+    const next = this._doc.entities.filter((e) => e.kind !== 'helper');
+    const n = before - next.length;
     if (n > 0) {
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = next;
+        this._lastHelperId = null;
+        this.touch();
+        this.emit();
+      });
     }
     return n;
   }
 
   removeHelper(id: string): boolean {
-    const before = this._doc.entities.length;
-    this._doc.entities = this._doc.entities.filter((e) => e.id !== id);
-    const ok = this._doc.entities.length < before;
+    const next = this._doc.entities.filter((e) => e.id !== id);
+    const ok = next.length < this._doc.entities.length;
     if (ok) {
-      if (this._lastHelperId === id) this._lastHelperId = null;
-      this.touch();
-      this.emit();
+      this.mutate(() => {
+        this._doc.entities = next;
+        if (this._lastHelperId === id) this._lastHelperId = null;
+        this.touch();
+        this.emit();
+      });
     }
     return ok;
   }
 
   load(doc: GkdDocument, filename: string, filePath?: string | null): void {
+    this.clearHistory();
     this._doc = doc;
     if (filePath) {
       this._filePath = filePath;
@@ -591,6 +698,7 @@ export class CadDocument {
    */
   scaleWorld(factor: number): void {
     if (!Number.isFinite(factor) || Math.abs(factor - 1) < 1e-15) return;
+    this.mutate(() => {
     const s = (v: number) => v * factor;
     const sp = (p: [number, number, number]): [number, number, number] => [
       s(p[0]),
@@ -686,9 +794,11 @@ export class CadDocument {
     this.rejoinWalls();
     this.touch();
     this.emit();
+    });
   }
 
   reset(): void {
+    this.clearHistory();
     this._doc = createEmptyDocument();
     this._filename = 'Sans titre.gkd';
     this._filePath = null;

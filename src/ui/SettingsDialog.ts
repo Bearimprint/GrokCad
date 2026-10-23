@@ -1,4 +1,8 @@
 import type { AppPrefsManager } from '../core/appPrefs';
+import {
+  DEFAULT_DOOR_WIDTH_METERS,
+  DEFAULT_WINDOW_WIDTH_METERS,
+} from '../core/appPrefs';
 import type { PenManager } from '../core/penPrefs';
 import { resolvePen } from '../core/penPrefs';
 import type { TextPrefsManager } from '../core/textPrefs';
@@ -29,6 +33,8 @@ export class SettingsDialog {
   private stylesList: HTMLElement;
   private textboxPadInput: HTMLInputElement;
   private insertRailSideSelect: HTMLSelectElement;
+  private doorWidthInput: HTMLInputElement;
+  private windowWidthInput: HTMLInputElement;
   private onUnitsChange: UnitsChangeHandler | null = null;
 
   constructor(
@@ -74,6 +80,30 @@ export class SettingsDialog {
                 <option value="left">à Gauche du Canvas</option>
                 <option value="right">à Droite du Canvas</option>
               </select>
+            </label>
+          </section>
+          <section class="settings-section">
+            <h3>Portes & fenêtres</h3>
+            <p class="settings-hint">
+              Largeur proposée quand le curseur reste sur le point d’accroche
+              (<code>/porte</code>, <code>/fenetre</code>). En mètres réels.
+              Éloigner la souris le long du mur fixe une autre largeur ;
+              <code>dx 0.8</code> aussi. <strong>[ALT]</strong> change le côté
+              du battant, <strong>[CTRL]</strong> le miroir.
+            </p>
+            <label class="settings-row">
+              <span>Largeur de porte</span>
+              <span class="settings-inline">
+                <input type="number" id="set-door-width" min="0.05" step="0.05" />
+                <span class="settings-unit-hint">mètre(s)</span>
+              </span>
+            </label>
+            <label class="settings-row">
+              <span>Largeur de fenêtre</span>
+              <span class="settings-inline">
+                <input type="number" id="set-window-width" min="0.05" step="0.05" />
+                <span class="settings-unit-hint">mètre(s)</span>
+              </span>
             </label>
           </section>
           <section class="settings-section">
@@ -130,6 +160,8 @@ export class SettingsDialog {
     this.insertRailSideSelect = this.overlay.querySelector(
       '#set-insert-rail-side',
     )!;
+    this.doorWidthInput = this.overlay.querySelector('#set-door-width')!;
+    this.windowWidthInput = this.overlay.querySelector('#set-window-width')!;
 
     for (const id of UNIT_IDS) {
       const opt = document.createElement('option');
@@ -185,6 +217,30 @@ export class SettingsDialog {
     this.insertRailSideSelect.addEventListener('change', () => {
       const v = this.insertRailSideSelect.value;
       if (v === 'left' || v === 'right') this.app.setInsertLayerRailSide(v);
+    });
+
+    this.doorWidthInput.addEventListener('change', () => {
+      const n = Number(this.doorWidthInput.value);
+      if (Number.isFinite(n) && n > 0) {
+        this.app.setDoorWidthMeters(n);
+        this.doorWidthInput.value = String(this.app.doorWidthMeters);
+      } else {
+        this.doorWidthInput.value = String(
+          this.app.doorWidthMeters || DEFAULT_DOOR_WIDTH_METERS,
+        );
+      }
+    });
+
+    this.windowWidthInput.addEventListener('change', () => {
+      const n = Number(this.windowWidthInput.value);
+      if (Number.isFinite(n) && n > 0) {
+        this.app.setWindowWidthMeters(n);
+        this.windowWidthInput.value = String(this.app.windowWidthMeters);
+      } else {
+        this.windowWidthInput.value = String(
+          this.app.windowWidthMeters || DEFAULT_WINDOW_WIDTH_METERS,
+        );
+      }
     });
 
     this.textboxPadInput.addEventListener('change', () => {
@@ -251,6 +307,8 @@ export class SettingsDialog {
       this.textPrefs?.textboxPadding ?? 0.03,
     );
     this.insertRailSideSelect.value = this.app.insertLayerRailSide;
+    this.doorWidthInput.value = String(this.app.doorWidthMeters);
+    this.windowWidthInput.value = String(this.app.windowWidthMeters);
   }
 
   private renderStyles(): void {

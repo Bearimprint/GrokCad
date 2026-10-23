@@ -35,6 +35,7 @@ import {
   sampleCircle,
   sampleCircleFromCenterPoint,
 } from './drawing';
+import type { AppPrefsManager } from './appPrefs';
 import type { PenManager } from './penPrefs';
 import type { CadDocument } from './document';
 import {
@@ -61,6 +62,7 @@ import {
   entityDrawLayer,
   hasAnchorPoint,
   hasInsertLayers,
+  isPositiveDrawLayer,
   resolveLayerStyle,
 } from './drawLayers';
 import {
@@ -203,10 +205,11 @@ export type ToolKind =
   | 'cote'
   | 'm1'
   | 'r1'
+  | 'laycur'
   | null;
 
 /** Outils de la famille polyligne (switch sans couper le dessin). */
-export type PolyToolKind = 'pline' | 'parc' | 'parct';
+export type PolyToolKind = 'pline' | 'parc' | 'parct' | 'arccont';
 
 /** Outils de la famille polymur (switch sans couper). */
 export type PolyWallToolKind = 'pmur' | 'pmarc' | 'pmarct';
@@ -241,6 +244,7 @@ export class DrawingTools {
   private designation: DesignationManager | null = null;
   private textPrefs: TextPrefsManager | null = null;
   private dimPrefs: DimPrefsManager | null = null;
+  private appPrefs: AppPrefsManager | null = null;
   /** Contenu en cours pour /text · /textbox. */
   private pendingText = '';
   private textBoxed = false;
@@ -438,7 +442,7 @@ export class DrawingTools {
   }
 
   private isPolyTool(k: ToolKind = this.kind): k is PolyToolKind {
-    return k === 'pline' || k === 'parc' || k === 'parct';
+    return k === 'pline' || k === 'parc' || k === 'parct' || k === 'arccont';
   }
 
   private isPolyWallTool(k: ToolKind = this.kind): k is PolyWallToolKind {
@@ -479,6 +483,10 @@ export class DrawingTools {
 
   setDimPrefs(dp: DimPrefsManager): void {
     this.dimPrefs = dp;
+  }
+
+  setAppPrefs(app: AppPrefsManager): void {
+    this.appPrefs = app;
   }
 
   /**
@@ -682,6 +690,9 @@ export class DrawingTools {
     if (mode === 'parc') {
       return 'PARC — départ de l’arc…  /pline /parct pour basculer  ·  Échap = fin';
     }
+    if (mode === 'arccont') {
+      return 'ARCCONT — 1er arc : départ → passage → fin, puis suite tangente (une seule polyligne, sans cassure). Échap = fin';
+    }
     return 'PARCT — 1er arc : départ → passage → fin. Puis arcs tangents. /pline /parc · Échap = fin';
   }
 
@@ -710,7 +721,7 @@ export class DrawingTools {
       );
       return;
     }
-    // parct : G1 si un segment existe déjà, sinon 3 pts
+    // parct / arccont : G1 si un segment existe déjà, sinon 3 pts
     const poly = this.getActivePolyline();
     if (poly && poly.segments.length > 0) {
       const tan = polylineEndTangent(poly);
@@ -718,19 +729,20 @@ export class DrawingTools {
         this.contPoint = tip;
         this.contTangent = tan;
         this.step = 0;
+        const tag = mode === 'arccont' ? 'ARCCONT' : 'PARCT';
         this.feedback(
-          `PARCT — arc tangent depuis (${fmt(tip)}). Point de fin…  /pline /parc · Échap = fin`,
+          `${tag} — arc tangent depuis (${fmt(tip)}). Point de fin…  Échap = fin`,
           'info',
         );
         return;
       }
     }
-    // Pas de tangente : 1er arc 3 pts (départ déjà posé)
     this.step = 1;
     this.contPoint = null;
     this.contTangent = null;
+    const tag = mode === 'arccont' ? 'ARCCONT' : 'PARCT';
     this.feedback(
-      `PARCT — départ = (${fmt(tip)}). Passage… (1er arc = 3 pts)  ·  Échap = fin`,
+      `${tag} — départ = (${fmt(tip)}). Passage… (1er arc = 3 pts)  ·  Échap = fin`,
       'info',
     );
   }
@@ -917,16 +929,11 @@ export class DrawingTools {
   }
 
   /**
-   * /arccont — premier arc comme /arc, puis arcs G1 enchaînés.
+   * /arccont — arcs G1 dans **une seule** polyligne (pas de cassure entre traits).
+   * 1er arc = 3 points, puis un clic = fin tangente.
    */
   startArcCont(): void {
-    this.resetState();
-    this.kind = 'arccont';
-    this.armPick();
-    this.feedback(
-      'ARCCONT — 1er arc : départ → passage → fin. Puis point suivant (continuité tangente). Échap = terminer.',
-      'info',
-    );
+    this.enterPolyTool('arccont');
   }
 
   /** /cercle — centre → rayon. */
@@ -2028,7 +2035,11 @@ export class DrawingTools {
       this.viewport.setPreview([this.p0, end], stroke);
       return;
     }
-    if (this.kind === 'parct' && this.contPoint && this.contTangent) {
+    if (
+      (this.kind === 'parct' || this.kind === 'arccont') &&
+      this.contPoint &&
+      this.contTangent
+    ) {
       const arc = arcFromTangentContinue(
         this.contPoint,
         this.contTangent,
@@ -2042,9 +2053,9 @@ export class DrawingTools {
       }
       return;
     }
-    // parc / parct (1er arc 3 pts) : même rubber-band que /arc
+    // parc / parct / arccont (1er arc 3 pts) : même rubber-band que /arc
     if (
-      (this.kind === 'parc' || this.kind === 'parct') &&
+      (this.kind === 'parc' || this.kind === 'parct' || this.kind === 'arccont') &&
       !this.contPoint
     ) {
       this.previewArc3(cur, stroke);
@@ -2420,6 +2431,7 @@ export class DrawingTools {
     else if (this.kind === 'arcc') this.onArccPoint(pt);
     else if (this.kind === 'arc') this.onArc3Point(pt);
     else if (this.kind === 'arccont') this.onArcContPoint(pt);
+    else if (this.kind === 'laycur') this.onLayerCurrentPoint(pt);
     else if (this.kind === 'circle') this.onCirclePoint(pt);
     else if (this.kind === 'select') this.onSelectPoint(pt);
     else if (this.kind === 'copy') this.onCopyPoint(pt);
@@ -3114,15 +3126,81 @@ export class DrawingTools {
     this.viewport.setOpeningPreview(opening ? [opening] : null);
   }
 
-  /** Distance souris le long de l’hôte → longueur et sens. */
+  /** Distance souris le long de l’hôte → longueur et sens.
+   *  Tout près de l’ancre : largeur par défaut (porte / fenêtre).
+   */
   private applyPointerLength(pt: Vec3): void {
     if (!this.insertHit) return;
     const fr = frameFromHit(this.insertHit, this.insertFlipAlt, this.insertFlipCtrl);
     const proj =
       (pt[0] - fr.origin[0]) * fr.axisX[0] +
       (pt[1] - fr.origin[1]) * fr.axisX[1];
+    const abs = Math.abs(proj);
+    const min = metersToDoc(0.05, this.doc.units);
+    if (abs < min) {
+      const d = this.defaultOpeningLength();
+      this.insertXSign = 1;
+      this.insertLength = d ?? Math.max(0.001, abs);
+      return;
+    }
     this.insertXSign = proj < 0 ? -1 : 1;
-    this.insertLength = Math.max(0.001, Math.abs(proj));
+    this.insertLength = abs;
+  }
+
+  /** Largeur par défaut (mètres réels → unité du document), ou null. */
+  private defaultOpeningLength(): number | null {
+    const app = this.appPrefs;
+    const tab = this.placeTab ?? '';
+    const name = this.placeName ?? '';
+    if (!app) return null;
+    if (tab.includes('doors') || name.startsWith('porte')) {
+      return metersToDoc(app.doorWidthMeters, this.doc.units);
+    }
+    if (tab.includes('windows') || name.startsWith('fenetre')) {
+      return metersToDoc(app.windowWidthMeters, this.doc.units);
+    }
+    return null;
+  }
+
+  /** /mc — le calque de l’élément cliqué devient le calque courant. */
+  startMakeLayerCurrent(): void {
+    this.resetState();
+    this.kind = 'laycur';
+    this.armPick();
+    this.feedback(
+      'CALQUE — cliquez un élément : son calque devient le calque courant. Échap = fin.',
+      'info',
+    );
+  }
+
+  private onLayerCurrentPoint(pt: Vec3): void {
+    const hit = findNearestEntity(
+      pt,
+      this.pickableEntities(),
+      this.viewport.snapToleranceMeters(),
+    );
+    if (!hit) {
+      this.feedback(
+        `Aucun élément dans ${this.viewport.snapRadiusPx()} px.`,
+        'warn',
+      );
+      return;
+    }
+    const layer = entityDrawLayer(hit.entity);
+    if (!isPositiveDrawLayer(layer)) {
+      this.feedback(
+        'Cet élément est sur un calque d’insertion (−1…−127), pas un calque de dessin.',
+        'warn',
+      );
+      return;
+    }
+    this.doc.setCurrentDrawLayer(layer);
+    const table = this.doc.drawLayerLabels;
+    const row = table.find((l) => l.id === layer);
+    this.feedback(
+      `Calque courant → ${layer}  ${row?.label ?? ''}`.trim(),
+      'ok',
+    );
   }
 
   private onInsertInPoint(pt: Vec3): void {
@@ -3761,6 +3839,7 @@ export class DrawingTools {
       this.doc.replaceAllEntities(this.rejoinSnappedEntities, {
         rejoin: true,
         strategy: preferred,
+        history: false,
       });
     }
 
@@ -3834,6 +3913,7 @@ export class DrawingTools {
     this.doc.replaceAllEntities(this.rejoinSnappedEntities, {
       rejoin: true,
       strategy: sid,
+      history: false,
     });
     this.announceJonctionSolution();
   }
@@ -5012,20 +5092,23 @@ export class DrawingTools {
       );
       if (!arc) {
         this.feedback(
-          'Position impossible pour un arc lisse — déplacez la souris (preview disparaît si invalide).',
+          'Position impossible pour un arc lisse — déplacez la souris (l’aperçu disparaît).',
           'warn',
         );
         return;
       }
-      this.doc.addEntity(arc);
+      this.commitPolyArcSeg(arc);
       this.contPoint = arcEndPoint(arc);
       this.contTangent = arcEndTangent(arc);
+      this.p0 = this.contPoint;
+      this.p1 = null;
+      this.step = 0;
+      this.viewport.setPreview(null);
       const spanDeg = ((arc.endAngle - arc.startAngle) * 180) / Math.PI;
       this.feedback(
-        `Arc cont. r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — point suivant (Échap termine).`,
+        `Arc continu r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — suite sans cassure. Échap termine.`,
         'ok',
       );
-      this.viewport.setPreview(null);
       return;
     }
 
@@ -5058,19 +5141,20 @@ export class DrawingTools {
   }
 
   private commitArcAndMaybeContinue(arc: ArcEntity, cont: boolean): void {
-    this.doc.addEntity(arc);
     const spanDeg = ((arc.endAngle - arc.startAngle) * 180) / Math.PI;
     if (cont) {
+      this.commitPolyArcSeg(arc);
       this.contPoint = arcEndPoint(arc);
       this.contTangent = arcEndTangent(arc);
-      this.p0 = null;
+      this.p0 = this.contPoint;
       this.p1 = null;
       this.step = 0;
       this.feedback(
-        `1er arc r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — suite continue (tangente). Échap termine.`,
+        `1er arc r=${this.fmtLen(arc.radius)}, ${spanDeg.toFixed(1)}° — suite tangente, une seule polyligne. Échap termine.`,
         'ok',
       );
     } else {
+      this.doc.addEntity(arc);
       this.feedback(
         `Arc r=${this.fmtLen(arc.radius)}, balayage ${spanDeg.toFixed(1)}° — départ suivant, ou Échap.`,
         'ok',
@@ -5129,7 +5213,11 @@ export class DrawingTools {
       this.step === 2 &&
       this.rejoinPreEntities
     ) {
-      this.doc.replaceAllEntities(this.rejoinPreEntities, { rejoin: false });
+      this.doc.replaceAllEntities(this.rejoinPreEntities, {
+        rejoin: false,
+        history: false,
+      });
+      this.doc.dropLastUndo();
     }
     this.unbindAltFlip();
     this.unbindAltTrack();

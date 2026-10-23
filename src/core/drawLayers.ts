@@ -73,11 +73,18 @@ export function parseInsertCategory(tab: string): InsertCategory | null {
 
 /** Point d’ancrage (gros rond orange). Obligatoire pour toute insertion. */
 export const ANCHOR_LAYER = -9;
+/** Battant de porte : suit la largeur, pas l’épaisseur du mur. */
+export const SWING_LAYER = -10;
 
 export interface StretchAxes {
   x: boolean;
   y: boolean;
   z: boolean;
+  /**
+   * Battant : X et Y locaux suivent la largeur (scaleX), pas l’épaisseur du mur.
+   * Ne perce pas le mur (le trou vient des calques étirables XY).
+   */
+  swing?: boolean;
 }
 
 export type { DrawLayerLabel };
@@ -93,6 +100,7 @@ const STRETCH_BY_LAYER: Record<number, StretchAxes> = {
   [-6]: { x: true, y: false, z: true },
   [-7]: { x: false, y: true, z: true },
   [-8]: { x: true, y: true, z: true },
+  [-10]: { x: false, y: false, z: false, swing: true },
 };
 
 const INSERT_DEFAULT_LABELS: Record<number, string> = {
@@ -105,6 +113,7 @@ const INSERT_DEFAULT_LABELS: Record<number, string> = {
   [-7]: 'Étirable YZ',
   [-8]: 'Étirable XYZ',
   [-9]: 'Point d’ancrage',
+  [-10]: 'Battant (suit la largeur, pas l’épaisseur)',
 };
 
 export function isDrawLayerId(n: number): boolean {
