@@ -338,6 +338,7 @@ export function cloneEntity(e: Entity): Entity {
       direction: [...e.direction] as Vec3,
       defPoints: e.defPoints.map((p) => [...p] as Vec3),
       labelId: e.labelId, // l’appelant doit cloner le texte et re-lier
+      labelIds: e.labelIds ? [...e.labelIds] : undefined,
       labelPositions: e.labelPositions?.map((p) => [...p] as Vec3),
       labelRotations: e.labelRotations ? [...e.labelRotations] : undefined,
       style: { ...e.style },
@@ -374,9 +375,17 @@ export function cloneAndTranslate(
   });
   // Re-lier cotation ↔ libellé après nouveaux ids
   for (const c of cloned) {
-    if (c.kind === 'dimension' && c.labelId) {
-      const mapped = idMap.get(c.labelId);
-      c.labelId = mapped; // undefined si texte non copié
+    if (c.kind === 'dimension') {
+      if (c.labelIds && c.labelIds.length > 0) {
+        const mapped = c.labelIds
+          .map((id) => idMap.get(id))
+          .filter((id): id is string => !!id);
+        c.labelIds = mapped.length > 0 ? mapped : undefined;
+        const one = c.labelId ? idMap.get(c.labelId) : undefined;
+        c.labelId = one ?? c.labelIds?.[0];
+      } else if (c.labelId) {
+        c.labelId = idMap.get(c.labelId);
+      }
     }
     if (c.kind === 'text' && c.dimId) {
       const mapped = idMap.get(c.dimId);

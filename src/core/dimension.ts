@@ -334,6 +334,135 @@ export function createSingleCoteSegment(
   return { dim, text };
 }
 
+/** Ids des libellés liés, dans l’ordre des segments. `labelId` seul = un segment. */
+export function dimensionLabelIds(e: DimensionEntity): string[] {
+  const out: string[] = [];
+  const push = (id: string | undefined) => {
+    if (id && !out.includes(id)) out.push(id);
+  };
+  if (e.labelIds) {
+    for (const id of e.labelIds) push(id);
+  }
+  push(e.labelId);
+  return out;
+}
+
+/** Chaîne `/cotecont` (plusieurs segments, ou mode explicite). */
+export function isChainDimension(e: DimensionEntity): boolean {
+  return e.mode === 'chain' || e.defPoints.length > 2;
+}
+
+/**
+ * Chaîne `/cotecont` : **une** DimensionEntity + un TextEntity par segment.
+ * La distance de chaque libellé est la projection sur `direction`, pas la
+ * distance 3D entre les clics.
+ */
+export function createChainCote(
+  style: DimensionStyle,
+  lineAnchor: Vec3,
+  direction: Vec3,
+  defPoints: readonly Vec3[],
+  opts?: { unit?: UnitId; layer?: string },
+): { dim: DimensionEntity; texts: TextEntity[] } | null {
+  const dir = normalizeDimDir(direction);
+  if (!dir) return null;
+  const defs: Vec3[] = [];
+  for (const p of defPoints) {
+    const prev = defs[defs.length - 1];
+    if (prev) {
+      const raw =
+        (p[0] - prev[0]) * dir[0] + (p[1] - prev[1]) * dir[1];
+      if (Math.abs(raw) < 1e-6) continue;
+    }
+    defs.push([p[0], p[1], p[2]]);
+  }
+  if (defs.length < 2) return null;
+
+  const anchor: Vec3 = [lineAnchor[0], lineAnchor[1], lineAnchor[2]];
+  const dimId = nextId('dim');
+  const geom = buildDimensionGeom(style, anchor, dir, defs, {
+    unit: opts?.unit ?? 'm',
+  });
+  if (geom.labels.length !== defs.length - 1) return null;
+
+  const texts: TextEntity[] = geom.labels.map((lb) => {
+    const textId = nextId('dimtxt');
+    return {
+      id: textId,
+      kind: 'text',
+      layer: opts?.layer ?? DRAW_LAYER,
+      position: [...lb.position] as Vec3,
+      height: lb.height,
+      content: lb.content,
+      rotation: lb.rotation,
+      color: lb.color,
+      hAlign: 1,
+      vAlign: 0,
+      fontFamily: lb.fontFamily,
+      bold: lb.bold,
+      italic: lb.italic,
+      background: lb.background,
+      dimId,
+    };
+  });
+
+  const dim: DimensionEntity = {
+    id: dimId,
+    kind: 'dimension',
+    layer: opts?.layer ?? DRAW_LAYER,
+    style: { ...style },
+    lineAnchor: anchor,
+    direction: dir,
+    defPoints: defs,
+    labelId: texts[0]?.id,
+    labelIds: texts.map((t) => t.id),
+    mode: 'chain',
+  };
+
+  return { dim, texts };
+}
+
+/**
+ * Découpe une chaîne en cotes `/cote` (1 segment + 1 texte).
+ * La position d’un libellé déjà déplacé est conservée.
+ */
+export function explodeChainDimension(
+  dim: DimensionEntity,
+  labels: readonly TextEntity[],
+): Array<DimensionEntity | TextEntity> {
+  const out: Array<DimensionEntity | TextEntity> = [];
+  for (let i = 0; i + 1 < dim.defPoints.length; i++) {
+    const created = createSingleCoteSegment(
+      dim.style,
+      dim.lineAnchor,
+      dim.direction,
+      dim.defPoints[i]!,
+      dim.defPoints[i + 1]!,
+      { layer: dim.layer },
+    );
+    if (!created) continue;
+    if (dim.drawLayer !== undefined) created.dim.drawLayer = dim.drawLayer;
+    const old = labels[i];
+    if (old) {
+      created.text.position = [...old.position] as Vec3;
+      created.text.rotation = old.rotation;
+      created.text.content = old.content;
+      created.text.height = old.height;
+      created.text.color = old.color;
+      created.text.fontFamily = old.fontFamily;
+      created.text.bold = old.bold;
+      created.text.italic = old.italic;
+      created.text.background = old.background;
+      if (old.drawLayer !== undefined) created.text.drawLayer = old.drawLayer;
+      else if (dim.drawLayer !== undefined) created.text.drawLayer = dim.drawLayer;
+    } else if (dim.drawLayer !== undefined) {
+      created.text.drawLayer = dim.drawLayer;
+    }
+    out.push(created.dim, created.text);
+  }
+  return out;
+}
+
 /** @deprecated Préférer createSingleCoteSegment pour /cote. */
 export function createDimensionEntity(
   style: DimensionStyle,

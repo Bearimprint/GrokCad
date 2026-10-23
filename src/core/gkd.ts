@@ -401,6 +401,11 @@ function normalizeEntityKind(
       typeof e.labelId === 'string' && e.labelId.trim()
         ? e.labelId.trim()
         : undefined;
+    const labelIds = Array.isArray(e.labelIds)
+      ? e.labelIds.filter(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0,
+        )
+      : undefined;
     const mode =
       e.mode === 'chain' ? 'chain' : e.mode === 'single' ? 'single' : undefined;
 
@@ -438,7 +443,8 @@ function normalizeEntityKind(
       lineAnchor,
       direction,
       defPoints,
-      labelId,
+      labelId: labelId ?? labelIds?.[0],
+      labelIds: labelIds && labelIds.length > 0 ? labelIds : undefined,
       mode: mode ?? (defPoints.length === 2 ? 'single' : 'chain'),
       labelPositions,
       labelRotations,

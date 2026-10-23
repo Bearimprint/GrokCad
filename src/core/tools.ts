@@ -40,7 +40,11 @@ import type { PenManager } from './penPrefs';
 import type { CadDocument } from './document';
 import {
   buildDimensionGeom,
+  createChainCote,
   createSingleCoteSegment,
+  dimensionLabelIds,
+  explodeChainDimension,
+  isChainDimension,
   normalizeDimDir,
 } from './dimension';
 import type { DimPrefsManager } from './dimPrefs';
@@ -104,7 +108,7 @@ import type { Aabb2, SelectionManager } from './selection';
 import { normalizeAabb } from './selection';
 import { previewStretch } from './stretch';
 import type { TextPrefsManager } from './textPrefs';
-import type { ArcEntity, Entity, PolylineEntity, Vec3, WallEntity } from './types';
+import type { ArcEntity, DimensionEntity, Entity, PolylineEntity, TextEntity, Vec3, WallEntity } from './types';
 import { APP_VERSION } from './types';
 import type { WallLibraryManager } from './wallPrefs';
 import {
@@ -203,6 +207,7 @@ export type ToolKind =
   | 'text'
   | 'textbox'
   | 'cote'
+  | 'cotecont'
   | 'm1'
   | 'r1'
   | 'laycur'
@@ -568,6 +573,27 @@ export class DrawingTools {
     this.armPick();
     this.feedback(
       `COTE « ${this.dimPrefs.current.name} » — 1 segment = 1 entité + texte. Passage de la ligne…  ·  Échap = fin (segments déjà posés conservés)`,
+      'info',
+    );
+  }
+
+  /**
+   * /cotecont — une seule chaîne (plusieurs segments, une entité).
+   * Échap valide la chaîne. /explode la sépare en cotes simples.
+   */
+  startCoteCont(): void {
+    if (!this.dimPrefs) {
+      this.feedback('Styles de cotation non initialisés.', 'err');
+      return;
+    }
+    this.resetState();
+    this.kind = 'cotecont';
+    this.coteDefPoints = [];
+    this.coteDir = null;
+    this.cotePlacedCount = 0;
+    this.armPick();
+    this.feedback(
+      `COTE CONT « ${this.dimPrefs.current.name} » — une seule chaîne. Passage de la ligne…  ·  Échap = valider`,
       'info',
     );
   }
@@ -1561,11 +1587,12 @@ export class DrawingTools {
    * - instances library → éléments basiques
    * - polylignes → lignes / arcs
    * - polymurs → murs unitaires (line/arc)
+   * - chaînes /cotecont → cotes simples
    */
   explodeSelection(): number {
     if (!this.selection || this.selection.size === 0) {
       this.feedback(
-        'Rien de sélectionné. /select objets, polylignes ou polymurs puis /explode.',
+        'Rien de sélectionné. /select objets, polylignes, polymurs ou chaînes de cotes puis /explode.',
         'err',
       );
       return 0;
@@ -1576,9 +1603,18 @@ export class DrawingTools {
     const pwalls = selected.filter(
       (e) => e.kind === 'wall' && e.path === 'poly',
     );
-    if (objs.length === 0 && polys.length === 0 && pwalls.length === 0) {
+    const chains = selected.filter(
+      (e): e is DimensionEntity =>
+        e.kind === 'dimension' && isChainDimension(e),
+    );
+    if (
+      objs.length === 0 &&
+      polys.length === 0 &&
+      pwalls.length === 0 &&
+      chains.length === 0
+    ) {
       this.feedback(
-        'Aucun objet library, polyligne ni polymur dans la sélection.',
+        'Aucun objet library, polyligne, polymur ni chaîne de cotes dans la sélection.',
         'warn',
       );
       return 0;
@@ -1600,18 +1636,22 @@ export class DrawingTools {
       removeIds.push(w.id);
       parts.push(...explodePolyWall(w));
     }
-    this.doc.removeEntities(removeIds);
-    this.doc.addEntities(parts);
+    for (const c of chains) {
+      removeIds.push(c.id);
+      parts.push(...explodeChainDimension(c, this.linkedDimensionTexts(c)));
+    }
+    this.doc.replaceWith(removeIds, parts);
     this.selection.set(parts.map((p) => p.id));
     const bits: string[] = [];
     if (objs.length) bits.push(`${objs.length} objet(s) library`);
     if (polys.length) bits.push(`${polys.length} polyligne(s)`);
     if (pwalls.length) bits.push(`${pwalls.length} polymur(s)`);
+    if (chains.length) bits.push(`${chains.length} chaîne(s) de cotes`);
     this.feedback(
       `${bits.join(' + ')} explosé(s) → ${parts.length} élément(s).`,
       'ok',
     );
-    return objs.length + polys.length + pwalls.length;
+    return objs.length + polys.length + pwalls.length + chains.length;
   }
 
   /** Point fourni par la ligne de commande (sans /). */
@@ -1665,7 +1705,7 @@ export class DrawingTools {
       this.feedback('Ancrage annulé.', 'warn');
       return;
     }
-    if (this.kind === 'cote') {
+    if (this.kind === 'cote' || this.kind === 'cotecont') {
       this.finishCote();
       return;
     }
@@ -1673,10 +1713,14 @@ export class DrawingTools {
   }
 
   /**
-   * Fin de /cote : les segments déjà posés restent dans le document
-   * (chaque paire de points a déjà créé une entité).
+   * Fin de /cote : les segments déjà posés restent.
+   * Fin de /cotecont : la chaîne entière est posée d’un coup (ou rien).
    */
   private finishCote(): void {
+    if (this.kind === 'cotecont') {
+      this.commitChainCote();
+      return;
+    }
     const n = this.cotePlacedCount;
     this.resetState();
     if (n > 0) {
@@ -1687,6 +1731,36 @@ export class DrawingTools {
     } else {
       this.feedback('COTE terminée (aucun segment posé).', 'warn');
     }
+  }
+
+  /** Valide la chaîne /cotecont en une entité + un texte par segment. */
+  private commitChainCote(): void {
+    const pts = this.coteDefPoints.map((p) => [p[0], p[1], p[2]] as Vec3);
+    const anchor = this.p0 ? ([...this.p0] as Vec3) : null;
+    const dir = this.coteDir ? ([...this.coteDir] as Vec3) : null;
+    const style = this.dimPrefs ? this.dimPrefs.snapshotCurrent() : null;
+    const unit = this.viewport.getUnits();
+    this.resetState();
+    if (!anchor || !dir || !style || pts.length < 2) {
+      this.feedback(
+        pts.length > 0
+          ? 'COTE CONT — chaîne incomplète, rien posé.'
+          : 'COTE CONT terminée (aucun segment).',
+        'warn',
+      );
+      return;
+    }
+    const created = createChainCote(style, anchor, dir, pts, { unit });
+    if (!created) {
+      this.feedback('COTE CONT — chaîne invalide (points confondus).', 'warn');
+      return;
+    }
+    this.doc.addEntities([created.dim, ...created.texts]);
+    const n = created.texts.length;
+    this.feedback(
+      `Chaîne de cotes posée — ${n} segment${n > 1 ? 's' : ''}, 1 entité. /explode pour séparer.`,
+      'ok',
+    );
   }
 
   /**
@@ -1731,7 +1805,7 @@ export class DrawingTools {
 
   cancel(announce = true): void {
     // /cote : les segments déjà posés restent — ne pas « annuler » le travail
-    if (this.kind === 'cote') {
+    if (this.kind === 'cote' || this.kind === 'cotecont') {
       this.finishCote();
       return;
     }
@@ -1895,7 +1969,7 @@ export class DrawingTools {
       return;
     }
 
-    if (this.kind === 'cote') {
+    if (this.kind === 'cote' || this.kind === 'cotecont') {
       this.previewCote(cur);
       return;
     }
@@ -2448,7 +2522,7 @@ export class DrawingTools {
     else if (this.kind === 'dist') this.onDistPoint(pt);
     else if (this.kind === 'rect') this.onRectPoint(pt);
     else if (this.kind === 'text' || this.kind === 'textbox') this.onTextPoint(pt);
-    else if (this.kind === 'cote') this.onCotePoint(pt);
+    else if (this.kind === 'cote' || this.kind === 'cotecont') this.onCotePoint(pt);
   }
 
   private onRectPoint(pt: Vec3): void {
@@ -2518,12 +2592,14 @@ export class DrawingTools {
 
   private onCotePoint(pt: Vec3): void {
     if (!this.dimPrefs) return;
+    const chain = this.kind === 'cotecont';
+    const tag = chain ? 'COTE CONT' : 'COTE';
     // step 0 : ancre de la ligne de côte
     if (this.step === 0) {
       this.p0 = [...pt] as Vec3;
       this.step = 1;
       this.feedback(
-        `COTE — passage (${fmt(pt)}). Direction de la ligne de côte…  [Shift]=H/45°/V`,
+        `${tag} — passage (${fmt(pt)}). Direction de la ligne de côte…  [Shift]=H/45°/V`,
         'ok',
       );
       this.updatePreview();
@@ -2546,7 +2622,9 @@ export class DrawingTools {
       this.step = 2;
       this.coteDefPoints = [];
       this.feedback(
-        'COTE — 1er point de définition…  (chaque segment = 1 entité + texte). Échap = fin',
+        chain
+          ? `${tag} — 1er point à coter…  Échap = valider la chaîne`
+          : 'COTE — 1er point de définition…  (chaque segment = 1 entité + texte). Échap = fin',
         'ok',
       );
       this.viewport.setPreview(null);
@@ -2554,9 +2632,33 @@ export class DrawingTools {
       this.viewport.setPreviewLabels(null);
       return;
     }
-    // step >= 2 : points de définition — commit immédiat à chaque segment
+    // step >= 2 : points de définition
     if (!this.p0 || !this.coteDir || !this.dimPrefs) return;
     this.coteDefPoints.push([pt[0], pt[1], pt[2]]);
+    if (this.coteDefPoints.length >= 2) {
+      const a = this.coteDefPoints[this.coteDefPoints.length - 2]!;
+      const b = this.coteDefPoints[this.coteDefPoints.length - 1]!;
+      const raw =
+        (b[0] - a[0]) * this.coteDir[0] + (b[1] - a[1]) * this.coteDir[1];
+      if (Math.abs(raw) < 1e-6) {
+        this.coteDefPoints.pop();
+        this.feedback(
+          'Point confondu sur la ligne de côte — recliquez plus loin.',
+          'warn',
+        );
+        return;
+      }
+    }
+    if (chain) {
+      const n = this.coteDefPoints.length;
+      this.feedback(
+        n < 2
+          ? `${tag} — point suivant pour le 1er segment…  Échap = valider`
+          : `${tag} — ${n - 1} segment(s). Point suivant ou Échap = valider`,
+        'ok',
+      );
+      return;
+    }
     if (this.coteDefPoints.length === 1) {
       this.feedback(
         'COTE — point suivant pour le 1er segment…  Échap = fin',
@@ -3569,9 +3671,25 @@ export class DrawingTools {
     this.resetState();
   }
 
+  /** Libellés d’une cotation, dans l’ordre des segments. */
+  private linkedDimensionTexts(dim: DimensionEntity): TextEntity[] {
+    const byId = new Map<string, TextEntity>();
+    for (const e of this.doc.entities) {
+      if (e.kind === 'text') byId.set(e.id, e);
+    }
+    const out: TextEntity[] = [];
+    for (const id of dimensionLabelIds(dim)) {
+      const t = byId.get(id);
+      if (t) out.push(t);
+    }
+    return out;
+  }
+
   private describeOneTarget(e: Entity): string {
     if (e.kind === 'dimension') {
-      return 'cotation (ligne + texte lié)';
+      return e.mode === 'chain' || e.defPoints.length > 2
+        ? 'chaîne de cotes (ligne + textes liés)'
+        : 'cotation (ligne + texte lié)';
     }
     if (e.kind === 'text' && e.dimId) {
       return 'texte de cotation (libellé seul)';
@@ -3631,16 +3749,13 @@ export class DrawingTools {
         dimension: 'offset',
         unit: this.doc.units,
       });
-      if (e.labelId) {
-        const txt = this.doc.entities.find((x) => x.id === e.labelId);
-        if (txt && txt.kind === 'text') {
-          appendEntityPreview(translateEntity(txt, dx, dy, 0), strokes, {
-            color: previewColor,
-            pointMark: 'hline',
-            dimension: 'entity',
-            unit: this.doc.units,
-          });
-        }
+      for (const txt of this.linkedDimensionTexts(e)) {
+        appendEntityPreview(translateEntity(txt, dx, dy, 0), strokes, {
+          color: previewColor,
+          pointMark: 'hline',
+          dimension: 'entity',
+          unit: this.doc.units,
+        });
       }
     } else {
       appendEntityPreview(translateEntity(e, dx, dy, 0), strokes, {
@@ -3725,9 +3840,8 @@ export class DrawingTools {
       if (e) {
         const rotated = rotateEntityAround(e, this.p0, ang);
         this.pushEntityPreviewStrokes(rotated, previewColor, strokes);
-        if (e.kind === 'dimension' && e.labelId) {
-          const txt = this.doc.entities.find((x) => x.id === e.labelId);
-          if (txt && txt.kind === 'text') {
+        if (e.kind === 'dimension') {
+          for (const txt of this.linkedDimensionTexts(e)) {
             this.pushEntityPreviewStrokes(
               rotateEntityAround(txt, this.p0, ang),
               previewColor,

@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.26.0**  
+> Version de référence : **0.27.0**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -118,6 +118,7 @@ Point accroché réutilisable avec `@`. Souris courante : `.` (ou `m` / `souris`
 | `/text` | `/txt` `/texte` | Texte. Style barre du haut |
 | `/textbox` | `/txb` `/cartouche` | Texte + rectangle |
 | `/cote` | `/dim` `/dimension` `/cotation` | 1 segment = 1 cote + texte lié |
+| `/cotecont` | `/cotcont` `/dimcont` | **Une** chaîne : passage, direction, puis les points. **Échap** valide. `/explode` sépare |
 | `/cotations` | `/dimstyles` | Styles de cotation |
 | `/hatch` | `/hachure` `/hachures` `/motif` | Bibliothèque de hachures |
 | `/fill` | `/remplir` `/hachurer` | Remplit une polyligne avec la hachure courante |

@@ -9,6 +9,7 @@ import {
   type LayerPatch,
 } from './drawLayers';
 import { createEmptyDocument } from './gkd';
+import { dimensionLabelIds } from './dimension';
 import type {
   ArcEntity,
   CameraState,
@@ -371,44 +372,55 @@ export class CadDocument {
     return this.removeEntities([id]) > 0;
   }
 
-  /**
-   * Supprime plusieurs entités.
-   * Cotation → supprime aussi son TextEntity libellé (`labelId`).
-   * Texte libellé → détache la cotation parente (`labelId`).
-   */
-  removeEntities(ids: Iterable<string>): number {
+  /** Cotation désignée → ses libellés (chaîne comprise) suivent. */
+  private withDimensionLabels(ids: Iterable<string>): Set<string> {
     const set = new Set(ids);
-    if (set.size === 0) return 0;
-
-    // Étendre : dim → son label
+    if (set.size === 0) return set;
     for (const e of this._doc.entities) {
-      if (e.kind === 'dimension' && set.has(e.id) && e.labelId) {
-        set.add(e.labelId);
+      if (e.kind !== 'dimension' || !set.has(e.id)) continue;
+      for (const id of dimensionLabelIds(e)) set.add(id);
+      for (const t of this._doc.entities) {
+        if (t.kind === 'text' && t.dimId === e.id) set.add(t.id);
       }
     }
+    return set;
+  }
+
+  /** Un libellé supprimé seul : la chaîne reste, sans ce texte. */
+  private retargetDimensionLabels(entities: Entity[]): Entity[] {
+    const alive = new Set(entities.map((e) => e.id));
+    return entities.map((e) => {
+      if (e.kind !== 'dimension') return e;
+      const ids = dimensionLabelIds(e).filter((id) => alive.has(id));
+      const chain = e.mode === 'chain' || e.defPoints.length > 2;
+      const nextLabelId = ids[0];
+      const nextLabelIds = chain && ids.length > 0 ? ids : undefined;
+      const sameId = e.labelId === nextLabelId;
+      const prevIds = e.labelIds;
+      const sameIds =
+        (prevIds?.length ?? 0) === (nextLabelIds?.length ?? 0) &&
+        (nextLabelIds ?? []).every((id, i) => prevIds?.[i] === id);
+      if (sameId && sameIds) return e;
+      return { ...e, labelId: nextLabelId, labelIds: nextLabelIds };
+    });
+  }
+
+  /**
+   * Supprime plusieurs entités.
+   * Cotation → supprime aussi ses TextEntity libellés.
+   * Texte libellé seul → la cotation reste, sans ce libellé.
+   */
+  removeEntities(ids: Iterable<string>): number {
+    const set = this.withDimensionLabels(ids);
+    if (set.size === 0) return 0;
 
     let n = 0;
     this.mutate(() => {
       const before = this._doc.entities.length;
-      this._doc.entities = this._doc.entities
-        .filter((e) => !set.has(e.id))
-        .map((e) => {
-          // Texte libellé supprimé seul → cotation orpheline sans labelId
-          if (e.kind === 'dimension' && e.labelId && set.has(e.labelId)) {
-            return { ...e, labelId: undefined };
-          }
-          return e;
-        });
-
-      this._doc.entities = this._doc.entities.map((e) => {
-        if (e.kind !== 'dimension' || !e.labelId) return e;
-        const stillThere = this._doc.entities.some((x) => x.id === e.labelId);
-        if (!stillThere) return { ...e, labelId: undefined };
-        return e;
-      });
-
+      const filtered = this._doc.entities.filter((e) => !set.has(e.id));
+      this._doc.entities = this.retargetDimensionLabels(filtered);
       n = before - this._doc.entities.length;
-      if (n > 0 || set.size > 0) {
+      if (n > 0) {
         if (this._lastHelperId && set.has(this._lastHelperId)) {
           this._lastHelperId = null;
         }
@@ -421,17 +433,26 @@ export class CadDocument {
   }
 
   /**
+   * Retire des entités et en ajoute d’autres, en un seul pas d’annulation.
+   * Les libellés d’une cotation retirée partent avec elle.
+   */
+  replaceWith(removeIds: Iterable<string>, add: readonly Entity[]): void {
+    const set = this.withDimensionLabels(removeIds);
+    this.mutate(() => {
+      const filtered = this._doc.entities.filter((e) => !set.has(e.id));
+      this._doc.entities = [...this.retargetDimensionLabels(filtered), ...add];
+      this.rejoinWalls();
+      this.touch();
+      this.emit();
+    });
+  }
+
+  /**
    * Déplace les entités (ids) de (dx,dy,dz).
    * Si une cotation est déplacée, son libellé (`labelId`) suit automatiquement.
    */
   translateEntities(ids: Iterable<string>, dx: number, dy: number, dz = 0): number {
-    const set = new Set(ids);
-    // Cotation sélectionnée → libellé suit
-    for (const e of this._doc.entities) {
-      if (e.kind === 'dimension' && set.has(e.id) && e.labelId) {
-        set.add(e.labelId);
-      }
-    }
+    const set = this.withDimensionLabels(ids);
     let n = 0;
     const next = this._doc.entities.map((e) => {
       if (!set.has(e.id)) return e;
@@ -467,12 +488,7 @@ export class CadDocument {
    * Cotation sélectionnée → son libellé suit.
    */
   rotateEntities(ids: Iterable<string>, pivot: Vec3, angle: number): number {
-    const set = new Set(ids);
-    for (const e of this._doc.entities) {
-      if (e.kind === 'dimension' && set.has(e.id) && e.labelId) {
-        set.add(e.labelId);
-      }
-    }
+    const set = this.withDimensionLabels(ids);
     let n = 0;
     const next = this._doc.entities.map((e) => {
       if (!set.has(e.id)) return e;
@@ -594,13 +610,7 @@ export class CadDocument {
 
   /** Copie les entités (nouveaux ids) décalées de (dx,dy,dz). */
   copyEntities(ids: Iterable<string>, dx: number, dy: number, dz = 0): Entity[] {
-    const set = new Set(ids);
-    // Cotation → inclure son libellé TextEntity
-    for (const e of this._doc.entities) {
-      if (e.kind === 'dimension' && set.has(e.id) && e.labelId) {
-        set.add(e.labelId);
-      }
-    }
+    const set = this.withDimensionLabels(ids);
     const src = this._doc.entities.filter((e) => set.has(e.id));
     if (src.length === 0) return [];
     const copies = cloneAndTranslate(src, dx, dy, dz, this.units);

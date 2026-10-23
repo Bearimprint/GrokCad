@@ -1536,7 +1536,7 @@ const commands: CommandDef[] = [
     name: 'explode',
     aliases: ['expld', 'disassociate', 'dissocier'],
     summary:
-      'Explose objets library et polylignes sélectionnés en éléments basiques',
+      'Explose objets library, polylignes, polymurs et chaînes de cotes en éléments simples',
     run: (ctx) => {
       ctx.tools.explodeSelection();
     },
@@ -2187,6 +2187,33 @@ const commands: CommandDef[] = [
       }
       ctx.tools.cancel(false);
       ctx.tools.startCote();
+      ctx.tools.acceptPoint(parsed.points[0]!);
+      if (parsed.points.length >= 2) {
+        ctx.tools.acceptPoint(parsed.points[1]!);
+      }
+    },
+  },
+  {
+    name: 'cotecont',
+    aliases: ['cotcont', 'dimcont', 'cotationcontinue', 'cotescontinues'],
+    summary:
+      'Cotes en continu : une seule chaîne (plusieurs segments). Échap valide. /explode sépare.',
+    usage: 'interactif  ·  -1,0,0 dx 1  (passage + direction, puis clics)',
+    run: (ctx, args) => {
+      if (args.length === 0) {
+        ctx.tools.startCoteCont();
+        return;
+      }
+      const parsed = parseLinePath(args, (token) => parsePoint([token], ctx));
+      if (!parsed.ok || parsed.points.length < 1) {
+        ctx.feedback(
+          'Usage : /cotecont  (interactif)  ·  /cotecont -1,0,0 dx 1  puis clics, Échap = valider',
+          'err',
+        );
+        return;
+      }
+      ctx.tools.cancel(false);
+      ctx.tools.startCoteCont();
       ctx.tools.acceptPoint(parsed.points[0]!);
       if (parsed.points.length >= 2) {
         ctx.tools.acceptPoint(parsed.points[1]!);

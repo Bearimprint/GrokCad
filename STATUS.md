@@ -6,19 +6,26 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.26.0**
+**Version courante : 0.27.0**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.26.0
+# → http://localhost:5173/  ·  titre GrokCad v.0.27.0
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-23 — cotes en continu (→ **0.27.0**)
+
+- **`/cotecont`** : une seule `DimensionEntity` (`mode: 'chain'`), un texte par segment. Passage + direction comme `/cote`, puis les points du bâtiment. La valeur est la projection sur la direction, pas la distance brute entre clics. **Échap** valide toute la chaîne d’un coup (un pas d’annulation).
+- Déplacer, tourner, copier ou effacer la chaîne emporte **tous** les libellés. Effacer un texte seul retire seulement ce libellé.
+- **`/explode`** découpe la chaîne en cotes `/cote` (positions de textes déjà déplacés conservées).
+- Pas encore : cote cumulée (totaux courant depuis l’origine).
 
 ## Session 2026-10-23 — portes, fenêtres, arcs continus, annuler (→ **0.26.0**)
 

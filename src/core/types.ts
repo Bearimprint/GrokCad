@@ -300,8 +300,9 @@ export interface DimensionStyle {
  * **`/cote` (mode `single`)** : **un seul segment** = une entité.
  * Le libellé est une **TextEntity séparée** (`labelId`) — sélectionnable / déplaçable.
  *
- * **`/cotecont` (mode `chain`, futur)** : chaîne multi-segments en une entité
- * (explosable en singles).
+ * **`/cotecont` (mode `chain`)** : chaîne multi-segments en **une** entité
+ * (un libellé par segment, `labelIds`). `/explode` la découpe en singles.
+ * Déplacer ou effacer la chaîne emporte tous ses libellés.
  *
  * Ligne de côte // `direction`, passant par `lineAnchor`.
  * Distance = projection des defPoints sur `direction`.
@@ -325,6 +326,11 @@ export interface DimensionEntity extends EntityBase {
    * Absent uniquement pour anciens fichiers (libellé virtuel legacy).
    */
   labelId?: string;
+  /**
+   * Ids des TextEntity, un par segment, dans l’ordre des `defPoints`.
+   * Chaîne `/cotecont`. `labelId` reste le premier.
+   */
+  labelIds?: string[];
   /**
    * `single` = /cote (1 segment) · `chain` = /cotecont (chaîne).
    * Défaut `single`.
@@ -545,5 +551,5 @@ export interface GkdDocument {
   };
 }
 
-export const APP_VERSION = '0.26.0';
+export const APP_VERSION = '0.27.0';
 export const GKD_MAGIC = 'GKD1' as const;
