@@ -6,19 +6,23 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.27.1**
+**Version courante : 0.27.2**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.27.1
+# → http://localhost:5173/  ·  titre GrokCad v.0.27.2
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-24 — annuler/rétablir l’unité (→ **0.27.2**)
+
+- **Annuler / rétablir** : chaque pas mémorise entités **+ unité** (+ caméra). Changer l’unité (Paramètres) = un seul pas : Ctrl+Z revient à l’ancienne unité et à l’ancienne géométrie, Ctrl+Y la réapplique ; préférences, décalages de murs et vue suivent. Tests : `npm run test:undo`, `test:openings`, `test:units`.
 
 ## Session 2026-10-24 — correctif cotes en continu (→ **0.27.1**)
 

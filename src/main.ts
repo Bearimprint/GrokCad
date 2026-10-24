@@ -375,14 +375,22 @@ const cmdBar = new CommandBar(
 // Changement d’unité : convertit la géométrie pour rester cohérent
 settings.setUnitsChangeHandler((prev, next) => {
   const f = convertFactor(prev, next);
-  doc.scaleWorld(f);
-  doc.setUnits(next);
+  doc.convertUnits(next, f);
   walls.scaleOffsets(f);
   viewport.applyCameraState(doc.camera);
   cmdBar.setFeedback(
     `Unité → ${next} (géométrie ×${f === 1 ? '1' : f.toPrecision(4)}). Grille = ${app.gridSpacingMeters} m réel.`,
     'ok',
   );
+});
+
+// Annuler / rétablir un changement d’unité : resynchronise prefs + murs + caméra
+doc.onUnitsRestored((prev, next) => {
+  const f = convertFactor(prev, next);
+  app.setUnits(next);
+  walls.scaleOffsets(f);
+  viewport.applyCameraState(doc.camera);
+  cmdBar.setFeedback(`Unité restaurée → ${next}.`, 'ok');
 });
 
 // Hooks édition library dans le contexte commandes

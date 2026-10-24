@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.27.1**  
+> Version de référence : **0.27.2**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  

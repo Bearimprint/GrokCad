@@ -37,6 +37,14 @@ import {
   type JonctionStrategyId,
 } from './walls';
 
+/** Un pas d’annulation. */
+interface HistorySnapshot {
+  entities: Entity[];
+  units: UnitId;
+  /** Caméra (convertie avec l’unité). */
+  camera?: GkdDocument['camera'];
+}
+
 /** Document de dessin en mémoire (source de vérité). */
 export class CadDocument {
   private _doc: GkdDocument;
@@ -46,9 +54,10 @@ export class CadDocument {
   private _dirty = false;
   private _lastHelperId: string | null = null;
   private listeners = new Set<() => void>();
-  /** Piles d’annulation (entités seulement). 80 pas. */
-  private undoStack: Entity[][] = [];
-  private redoStack: Entity[][] = [];
+  /** Piles d’annulation : entités + unités (+ caméra, mise à l’échelle). 80 pas. */
+  private undoStack: HistorySnapshot[] = [];
+  private redoStack: HistorySnapshot[] = [];
+  private unitsRestoreListeners = new Set<(prev: UnitId, next: UnitId) => void>();
   private historyDepth = 0;
   private historyMute = 0;
   private static readonly HISTORY_MAX = 80;
@@ -67,6 +76,34 @@ export class CadDocument {
     for (const fn of this.listeners) fn();
   }
 
+  /** Prévenu quand annuler/rétablir change l’unité du document. */
+  onUnitsRestored(fn: (prev: UnitId, next: UnitId) => void): () => void {
+    this.unitsRestoreListeners.add(fn);
+    return () => this.unitsRestoreListeners.delete(fn);
+  }
+
+  private historySnapshot(): HistorySnapshot {
+    return {
+      entities: this.cloneEntities(),
+      units: this.units,
+      camera: this._doc.camera ? structuredClone(this._doc.camera) : undefined,
+    };
+  }
+
+  private restore(snap: HistorySnapshot): void {
+    const prevUnits = this.units;
+    this._doc.entities = snap.entities;
+    if (snap.units !== prevUnits) {
+      this._doc.meta = { ...this._doc.meta, units: snap.units };
+      if (snap.camera) this._doc.camera = structuredClone(snap.camera);
+    }
+    this.touch();
+    if (snap.units !== prevUnits) {
+      for (const fn of this.unitsRestoreListeners) fn(prevUnits, snap.units);
+    }
+    this.emit();
+  }
+
   private cloneEntities(src: readonly Entity[] = this._doc.entities): Entity[] {
     return structuredClone(src) as Entity[];
   }
@@ -77,7 +114,7 @@ export class CadDocument {
    */
   private mutate(fn: () => void): void {
     if (this.historyMute === 0 && this.historyDepth === 0) {
-      this.undoStack.push(this.cloneEntities());
+      this.undoStack.push(this.historySnapshot());
       if (this.undoStack.length > CadDocument.HISTORY_MAX) this.undoStack.shift();
       this.redoStack.length = 0;
     }
@@ -101,10 +138,8 @@ export class CadDocument {
   undo(): boolean {
     const prev = this.undoStack.pop();
     if (!prev) return false;
-    this.redoStack.push(this.cloneEntities());
-    this._doc.entities = prev;
-    this.touch();
-    this.emit();
+    this.redoStack.push(this.historySnapshot());
+    this.restore(prev);
     return true;
   }
 
@@ -112,10 +147,8 @@ export class CadDocument {
   redo(): boolean {
     const next = this.redoStack.pop();
     if (!next) return false;
-    this.undoStack.push(this.cloneEntities());
-    this._doc.entities = next;
-    this.touch();
-    this.emit();
+    this.undoStack.push(this.historySnapshot());
+    this.restore(next);
     return true;
   }
 
@@ -699,6 +732,19 @@ export class CadDocument {
   get units(): UnitId {
     const u = this._doc.meta?.units;
     return isUnitId(u) ? u : 'm';
+  }
+
+  /**
+   * Change d’unité en convertissant la géométrie : **un** pas d’annulation
+   * (entités + unité + caméra).
+   */
+  convertUnits(unit: UnitId, factor: number): void {
+    if (this.units === unit && Math.abs(factor - 1) < 1e-15) return;
+    this.mutate(() => {
+      this.scaleWorld(factor);
+      this.setUnits(unit);
+    });
+    this.emit();
   }
 
   setUnits(unit: UnitId, opts?: { dirty?: boolean }): void {
