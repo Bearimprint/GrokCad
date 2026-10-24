@@ -377,12 +377,11 @@ export function cloneAndTranslate(
   for (const c of cloned) {
     if (c.kind === 'dimension') {
       if (c.labelIds && c.labelIds.length > 0) {
-        const mapped = c.labelIds
-          .map((id) => idMap.get(id))
-          .filter((id): id is string => !!id);
-        c.labelIds = mapped.length > 0 ? mapped : undefined;
+        // Par position : un libellé non copié laisse un trou ''.
+        const mapped = c.labelIds.map((id) => (id && idMap.get(id)) || '');
+        c.labelIds = mapped.some((id) => id) ? mapped : undefined;
         const one = c.labelId ? idMap.get(c.labelId) : undefined;
-        c.labelId = one ?? c.labelIds?.[0];
+        c.labelId = one ?? c.labelIds?.find((id) => id);
       } else if (c.labelId) {
         c.labelId = idMap.get(c.labelId);
       }

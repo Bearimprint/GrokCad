@@ -347,6 +347,17 @@ export function dimensionLabelIds(e: DimensionEntity): string[] {
   return out;
 }
 
+/**
+ * Libellés par **position** de segment : `slots[i]` = libellé du segment i,
+ * `undefined` si ce libellé a été effacé (trou `''` dans `labelIds`).
+ */
+export function dimensionLabelSlots(e: DimensionEntity): (string | undefined)[] {
+  if (e.labelIds && e.labelIds.length > 0) {
+    return e.labelIds.map((id) => (id ? id : undefined));
+  }
+  return [e.labelId];
+}
+
 /** Chaîne `/cotecont` (plusieurs segments, ou mode explicite). */
 export function isChainDimension(e: DimensionEntity): boolean {
   return e.mode === 'chain' || e.defPoints.length > 2;
@@ -425,10 +436,11 @@ export function createChainCote(
 /**
  * Découpe une chaîne en cotes `/cote` (1 segment + 1 texte).
  * La position d’un libellé déjà déplacé est conservée.
+ * `labels[i]` = libellé du segment i (par position, `undefined` si effacé).
  */
 export function explodeChainDimension(
   dim: DimensionEntity,
-  labels: readonly TextEntity[],
+  labels: readonly (TextEntity | undefined)[],
 ): Array<DimensionEntity | TextEntity> {
   const out: Array<DimensionEntity | TextEntity> = [];
   for (let i = 0; i + 1 < dim.defPoints.length; i++) {

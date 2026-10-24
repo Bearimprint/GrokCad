@@ -394,7 +394,12 @@ export class CadDocument {
       const ids = dimensionLabelIds(e).filter((id) => alive.has(id));
       const chain = e.mode === 'chain' || e.defPoints.length > 2;
       const nextLabelId = ids[0];
-      const nextLabelIds = chain && ids.length > 0 ? ids : undefined;
+      // Garder la position de chaque libellé : un texte effacé laisse un trou ''.
+      const slots = e.labelIds
+        ? e.labelIds.map((id) => (id && alive.has(id) ? id : ''))
+        : ids;
+      const nextLabelIds =
+        chain && slots.some((id) => id) ? slots : undefined;
       const sameId = e.labelId === nextLabelId;
       const prevIds = e.labelIds;
       const sameIds =

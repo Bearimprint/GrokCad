@@ -328,7 +328,8 @@ export interface DimensionEntity extends EntityBase {
   labelId?: string;
   /**
    * Ids des TextEntity, un par segment, dans l’ordre des `defPoints`.
-   * Chaîne `/cotecont`. `labelId` reste le premier.
+   * Chaîne `/cotecont`. `labelId` reste le premier. Indexé par segment :
+   * un libellé effacé laisse `''` (pas de décalage).
    */
   labelIds?: string[];
   /**
@@ -551,5 +552,5 @@ export interface GkdDocument {
   };
 }
 
-export const APP_VERSION = '0.27.0';
+export const APP_VERSION = '0.27.1';
 export const GKD_MAGIC = 'GKD1' as const;

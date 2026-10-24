@@ -6,19 +6,23 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.27.0**
+**Version courante : 0.27.1**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.27.0
+# → http://localhost:5173/  ·  titre GrokCad v.0.27.1
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-24 — correctif cotes en continu (→ **0.27.1**)
+
+- **`/cotecont` + `/explode`** : effacer un libellé seul ne décale plus les autres. `labelIds` reste indexé par segment (trou `''` pour un texte effacé), conservé à la copie et dans le `.gkd`. Test : `npm run test:cotecont`.
 
 ## Session 2026-10-23 — cotes en continu (→ **0.27.0**)
 

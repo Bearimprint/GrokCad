@@ -42,7 +42,7 @@ import {
   buildDimensionGeom,
   createChainCote,
   createSingleCoteSegment,
-  dimensionLabelIds,
+  dimensionLabelSlots,
   explodeChainDimension,
   isChainDimension,
   normalizeDimDir,
@@ -3671,18 +3671,13 @@ export class DrawingTools {
     this.resetState();
   }
 
-  /** Libellés d’une cotation, dans l’ordre des segments. */
-  private linkedDimensionTexts(dim: DimensionEntity): TextEntity[] {
+  /** Libellés d’une cotation, par position de segment (trou = undefined). */
+  private linkedDimensionTexts(dim: DimensionEntity): (TextEntity | undefined)[] {
     const byId = new Map<string, TextEntity>();
     for (const e of this.doc.entities) {
       if (e.kind === 'text') byId.set(e.id, e);
     }
-    const out: TextEntity[] = [];
-    for (const id of dimensionLabelIds(dim)) {
-      const t = byId.get(id);
-      if (t) out.push(t);
-    }
-    return out;
+    return dimensionLabelSlots(dim).map((id) => (id ? byId.get(id) : undefined));
   }
 
   private describeOneTarget(e: Entity): string {
@@ -3750,6 +3745,7 @@ export class DrawingTools {
         unit: this.doc.units,
       });
       for (const txt of this.linkedDimensionTexts(e)) {
+        if (!txt) continue;
         appendEntityPreview(translateEntity(txt, dx, dy, 0), strokes, {
           color: previewColor,
           pointMark: 'hline',
@@ -3842,6 +3838,7 @@ export class DrawingTools {
         this.pushEntityPreviewStrokes(rotated, previewColor, strokes);
         if (e.kind === 'dimension') {
           for (const txt of this.linkedDimensionTexts(e)) {
+        if (!txt) continue;
             this.pushEntityPreviewStrokes(
               rotateEntityAround(txt, this.p0, ang),
               previewColor,

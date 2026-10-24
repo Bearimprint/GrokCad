@@ -92,8 +92,11 @@ const kept = movedTexts[1]!;
 doc.removeEntities([firstText.id]);
 const afterDrop = doc.entities.find((e) => e.kind === 'dimension') as DimensionEntity;
 assert(doc.entities.filter((e) => e.kind === 'text').length === 1, 'un texte reste');
-assert(afterDrop.labelIds?.length === 1 && afterDrop.labelIds[0] === kept.id, 'labelIds resserré');
-assert(afterDrop.labelId === kept.id, 'labelId resserré');
+assert(
+  afterDrop.labelIds?.length === 2 && afterDrop.labelIds[0] === '' && afterDrop.labelIds[1] === kept.id,
+  'labelIds garde la position (trou au segment 0)',
+);
+assert(afterDrop.labelId === kept.id, 'labelId = premier libellé restant');
 
 doc.removeEntities([afterDrop.id]);
 assert(doc.entities.length === 0, 'suppression chaîne retire les textes');
@@ -138,5 +141,45 @@ assert(copyDim.labelIds!.every((id) => copyTexts.some((t) => t.id === id)), 'ids
 const round = parseGkd(serializeGkd(copyDoc.raw));
 const roundDim = round.entities.find((e) => e.kind === 'dimension' && e.mode === 'chain') as DimensionEntity;
 assert(roundDim.labelIds?.length === 2, 'labelIds dans le .gkd');
+
+// Régression v0.27.1 : effacer un libellé du milieu puis /explode
+// ne doit pas décaler les libellés restants sur d’autres segments.
+{
+  const { explodeChainDimension, dimensionLabelSlots } = await import('../src/core/dimension.ts');
+  const d = new CadDocument();
+  const c3 = createChainCote(
+    style,
+    [0, -1, 0],
+    [1, 0, 0],
+    [
+      [0, 0, 0],
+      [1, 0, 0],
+      [3, 0, 0],
+      [6, 0, 0],
+    ],
+    { unit: 'm' },
+  )!;
+  const t3 = c3.texts.map((t, i) => ({ ...t, position: [100 + i, 50, 0] as [number, number, number] }));
+  d.addEntities([c3.dim, ...t3]);
+  d.removeEntities([t3[1]!.id]);
+  const dim3 = d.entities.find((e) => e.kind === 'dimension') as DimensionEntity;
+  assert(dim3.labelIds?.[1] === '', 'trou au segment 1');
+  const byId = new Map(d.entities.filter((e) => e.kind === 'text').map((t) => [t.id, t as TextEntity]));
+  const slots = dimensionLabelSlots(dim3).map((id) => (id ? byId.get(id) : undefined));
+  const ex = explodeChainDimension(dim3, slots);
+  const exTexts = ex.filter((e) => e.kind === 'text') as TextEntity[];
+  assert(exTexts.length === 3, '3 textes après explode');
+  assert(exTexts[0]!.position[0] === 100, 'segment 0 garde son libellé');
+  assert(exTexts[1]!.position[0] !== 101 && exTexts[1]!.position[0] !== 102, 'segment 1 : libellé par défaut');
+  assert(exTexts[2]!.position[0] === 102 && exTexts[2]!.content === '3.000 m', 'segment 2 garde son libellé');
+
+  // Le trou survit au .gkd et à la copie.
+  const r = parseGkd(serializeGkd(d.raw));
+  const rd = r.entities.find((e) => e.kind === 'dimension') as DimensionEntity;
+  assert(rd.labelIds?.length === 3 && rd.labelIds[1] === '', 'trou conservé dans le .gkd');
+  const cp = d.copyEntities([dim3.id], 10, 0, 0);
+  const cd = cp.find((e) => e.kind === 'dimension') as DimensionEntity;
+  assert(cd.labelIds?.length === 3 && cd.labelIds[1] === '', 'trou conservé à la copie');
+}
 
 console.log('OK cotecont');
