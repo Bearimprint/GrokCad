@@ -1,3 +1,4 @@
+import { undoShortcut } from './shortcuts';
 import { executeLine, type CommandContext, type FeedbackLevel } from '../commands/registry';
 import type { AppPrefsManager } from '../core/appPrefs';
 import type { DimPrefsManager } from '../core/dimPrefs';
@@ -164,6 +165,33 @@ export class CommandBar {
       true, // capture
     );
 
+    /**
+     * Annuler / rétablir en phase **capture** sur window : marche que le focus
+     * soit sur le canvas, un bouton ou la ligne de commande, avant que le
+     * navigateur ne traite Ctrl+Z / Ctrl+Y. Exception : un champ texte non
+     * vide (autre que la CLI vide) garde l’annulation native de la saisie.
+     */
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        const kind = undoShortcut(e);
+        if (!kind) return;
+        const el = e.target as HTMLElement | null;
+        const tag = el?.tagName;
+        const editable =
+          tag === 'TEXTAREA' ||
+          (tag === 'INPUT' && (el as HTMLInputElement).type !== 'checkbox') ||
+          !!el?.isContentEditable;
+        if (editable && ((el as HTMLInputElement).value ?? el?.textContent ?? '').length > 0) {
+          return; // annulation native du texte en cours de saisie
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        this.runUndoRedo(kind);
+      },
+      true,
+    );
+
     window.addEventListener('keydown', (e) => {
       // Escape déjà traité en capture — ne pas re-traiter ici
       if (isEscapeKey(e)) return;
@@ -248,34 +276,6 @@ export class CommandBar {
         return;
       }
 
-      // Ctrl+Z annule le dessin (sauf si une saisie est en cours).
-      // Ctrl+Shift+Z ou Ctrl+Y rétablit.
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        !e.altKey &&
-        (e.key === 'z' || e.key === 'Z' || e.key === 'y' || e.key === 'Y')
-      ) {
-        const typing =
-          (tag === 'INPUT' || tag === 'TEXTAREA') &&
-          ((e.target as HTMLInputElement).value ?? '').length > 0;
-        const redo =
-          e.key === 'y' ||
-          e.key === 'Y' ||
-          ((e.key === 'z' || e.key === 'Z') && e.shiftKey);
-        if (typing && !redo && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-          return;
-        }
-        e.preventDefault();
-        e.stopPropagation();
-        if (redo) {
-          const ok = doc.redo();
-          this.setFeedback(ok ? 'Rétabli.' : 'Rien à rétablir.', ok ? 'ok' : 'warn');
-        } else {
-          const ok = doc.undo();
-          this.setFeedback(ok ? 'Annulé.' : 'Rien à annuler.', ok ? 'ok' : 'warn');
-        }
-        return;
-      }
       if (
         (e.key === 's' || e.key === 'S') &&
         (e.ctrlKey || e.metaKey) &&
@@ -395,6 +395,14 @@ export class CommandBar {
     }
   }
 
+  /** Annule / rétablit le dessin + message (raccourcis et commandes). */
+  runUndoRedo(kind: 'undo' | 'redo'): boolean {
+    const ok = kind === 'redo' ? this.ctx.doc.redo() : this.ctx.doc.undo();
+    if (kind === 'redo') this.setFeedback(ok ? 'Rétabli.' : 'Rien à rétablir.', ok ? 'ok' : 'warn');
+    else this.setFeedback(ok ? 'Annulé.' : 'Rien à annuler.', ok ? 'ok' : 'warn');
+    return ok;
+  }
+
   private async onKey(e: KeyboardEvent): Promise<void> {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -435,3 +443,4 @@ function isEscapeKey(e: KeyboardEvent): boolean {
     e.keyCode === 27
   );
 }
+

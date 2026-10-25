@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.27.2**  
+> Version de référence : **0.27.3**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -303,7 +303,7 @@ Clic barre d’état = suivante (clic droit = précédente). Prefs : `grokcad.pe
 | `/gridsnap` | `/gsnap` | `on \| off` — accroche clic droit sur un nœud de grille. Impossible si `/grid off` |
 | `/param` | `/params` `/settings` `/prefs` | Fenêtre Paramètres (unités, grille, snap, largeurs porte/fenêtre, styles) |
 | `/undo` | `/u` `/annuler` | Annule la dernière modification (aussi Ctrl+Z) |
-| `/redo` | `/retablir` `/rétablir` | Rétablit (Ctrl+Y ou Ctrl+Shift+Z) |
+| `/redo` | `/retablir` `/rétablir` `/refaire` | Rétablit (Ctrl+Y ou Ctrl+Shift+Z) |
 
 Barre du bas : **Grid ON/OFF** et **Grid Snap ON/OFF** (ON vert gras, OFF rouge gras). Clic = bascule. Si la grille est cachée, **Grid Snap OFF** est grisé et non cliquable. `/grid off` force l’affichage **Grid Snap OFF** grisé. Case Paramètres *« Grid Off désactive automatiquement le snap de la grille »* (cochée par défaut) : masquer la grille écrit aussi `gridsnap = off`.
 

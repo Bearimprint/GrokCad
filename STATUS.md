@@ -6,19 +6,24 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.27.2**
+**Version courante : 0.27.3**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.27.2
+# → http://localhost:5173/  ·  titre GrokCad v.0.27.3
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-25 — raccourcis annuler/rétablir (→ **0.27.3**)
+
+- **Ctrl/Cmd+Z**, **Ctrl+Y**, **Ctrl+Shift+Z** captés sur `window` en phase capture (focus canvas, bouton ou CLI vide). Un champ texte non vide garde l’annulation native. `/redo` gagne l’alias `/refaire`. Test : `npm run test:undo`.
+- Rappel : Ctrl+W / Ctrl+N / Ctrl+T (et Ctrl+Shift+W/N/T, Ctrl+Tab, Ctrl+Q sous Linux) sont réservés par le navigateur et ne peuvent pas être captés.
 
 ## Session 2026-10-24 — annuler/rétablir l’unité (→ **0.27.2**)
 

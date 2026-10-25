@@ -1829,7 +1829,7 @@ const commands: CommandDef[] = [
   },
   {
     name: 'redo',
-    aliases: ['retablir', 'rétablir'],
+    aliases: ['retablir', 'rétablir', 'refaire'],
     summary: 'Rétablit une annulation (Ctrl+Y ou Ctrl+Shift+Z)',
     run: (ctx) => {
       if (!ctx.doc.redo()) ctx.feedback('Rien à rétablir.', 'warn');
