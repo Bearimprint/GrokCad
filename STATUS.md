@@ -6,19 +6,23 @@
 > Algo `/jonction` + `/join` : **`JONCTION.md`** · priorités bandes : `multi-couches-wall_Y.md`.  
 > Vision : `README.md` · aide commandes : **`HELP.md`** (à jour pour text/cote/m1/r1).
 
-**Version courante : 0.27.3**
+**Version courante : 0.27.4**
 
 **Répertoire :** `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`
 
 ```bash
 /mnt/Raid4Tb/Program/GrokProjects/GrokCAD/lancer-GrokCad.sh
-# → http://localhost:5173/  ·  titre GrokCad v.0.27.3
+# → http://localhost:5173/  ·  titre GrokCad v.0.27.4
 export PATH="${HOME}/.local/node/bin:${PATH}"
 cd /mnt/Raid4Tb/Program/GrokProjects/GrokCAD
 # tsc --noEmit  (via ./node_modules/.bin/tsc si besoin)
 ```
 
 ---
+
+## Session 2026-10-25 — effacer une insertion (→ **0.27.4**)
+
+- **`/d` · Ctrl+D · `/delete`** sur une porte / fenêtre / insertion : cliquer **dans l’ouverture** ou sur ses traits désigne l’insertion (à égalité avec un trait du mur, l’insertion gagne). Effacée seule → le mur se referme. Effacer le mur emporte ses insertions (pas d’orphelin). Annuler / rétablir OK. Ctrl+D capté en phase capture. Test : `npm run test:openings` (`test-delete-insertion.mts`).
 
 ## Session 2026-10-25 — raccourcis annuler/rétablir (→ **0.27.3**)
 

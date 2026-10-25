@@ -1,7 +1,7 @@
 {
   "name": "grokcad",
   "private": true,
-  "version": "0.27.3",
+  "version": "0.27.4",
   "type": "module",
   "description": "GrokCAD — éditeur CAO 3D inspiré d'ARC+",
   "scripts": {
@@ -13,7 +13,7 @@
     "test:grid": "tsx scripts/test-grid.mts",
     "test:cotecont": "tsx scripts/test-cotecont.mts",
     "test:undo": "tsx scripts/test-undo.mts && tsx scripts/test-undo-commands.mts",
-    "test:openings": "tsx scripts/test-openings.mts && tsx scripts/test-insert-opening.mts",
+    "test:openings": "tsx scripts/test-openings.mts && tsx scripts/test-insert-opening.mts && tsx scripts/test-delete-insertion.mts",
     "test:units": "tsx scripts/test-units.mts",
     "test:layers": "tsx scripts/test-draw-layers.mts && tsx scripts/test-layer-style.mts"
   },

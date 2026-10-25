@@ -5,9 +5,12 @@
  */
 
 import { closestOnDimension } from './dimension';
+import { frameFromPlacement } from './insertOpening';
+import { objectDefCache } from './objectCache';
 import { objectInstanceStrokes } from './objectInstance';
 import { closestOnPolyline } from './polyline';
 import { findNearestDesignatable } from './paral';
+import type { InsertHostEntity } from './insertHost';
 import type { Entity, Vec3 } from './types';
 
 export type DesignationListener = (ids: ReadonlySet<string>) => void;
@@ -84,9 +87,13 @@ export function findNearestEntity(
 
   for (const e of entities) {
     if (e.kind === 'object') {
-      const near = closestOnObject(e, click);
+      const near = closestOnObject(e, click, entities);
       if (near.dist > maxDist) continue;
-      if (!best || near.dist < best.dist) {
+      // Insertion dans un mur : ses traits coïncident souvent avec ceux du
+      // mur (faces, tableaux) → à égalité, l’insertion l’emporte sur le mur.
+      const preferInsert =
+        !!e.insert && !!best && best.entity.kind === 'wall' && near.dist <= best.dist + 1e-6;
+      if (!best || near.dist < best.dist || preferInsert) {
         best = { entity: e, point: near.point, dist: near.dist };
       }
     } else if (e.kind === 'polyline') {
@@ -143,13 +150,55 @@ export function findNearestEntity(
   return best;
 }
 
+/**
+ * Clic **dans** l’empreinte d’une insertion (cadre de l’hôte) → distance 0.
+ * Permet de désigner une porte / fenêtre en cliquant dans l’ouverture.
+ */
+function insideInsertFootprint(
+  e: Extract<Entity, { kind: 'object' }>,
+  click: Vec3,
+  hosts: readonly Entity[],
+): boolean {
+  if (!e.insert) return false;
+  const host = hosts.find((h) => h.id === e.insert!.hostId);
+  if (!host || (host.kind !== 'wall' && host.kind !== 'line' && host.kind !== 'arc')) return false;
+  const def = objectDefCache.get(e.libTab, e.libName);
+  if (!def) return false;
+  const frame = frameFromPlacement(host as InsertHostEntity, e.insert, def.entities);
+  if (!frame) return false;
+  const o = frame.origin;
+  const ax = frame.axisX;
+  const ay = frame.axisY;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const s of objectInstanceStrokes(e, def, hosts)) {
+    for (const p of s.points) {
+      const dx = p[0] - o[0];
+      const dy = p[1] - o[1];
+      const lx = dx * ax[0] + dy * ax[1];
+      const ly = dx * ay[0] + dy * ay[1];
+      x0 = Math.min(x0, lx); x1 = Math.max(x1, lx);
+      y0 = Math.min(y0, ly); y1 = Math.max(y1, ly);
+    }
+  }
+  if (!(x1 > x0) || !(y1 >= y0)) return false;
+  const dx = click[0] - o[0];
+  const dy = click[1] - o[1];
+  const lx = dx * ax[0] + dy * ax[1];
+  const ly = dx * ay[0] + dy * ay[1];
+  return lx >= x0 && lx <= x1 && ly >= y0 && ly <= y1;
+}
+
 function closestOnObject(
   e: Extract<Entity, { kind: 'object' }>,
   click: Vec3,
+  hosts?: readonly Entity[],
 ): { point: Vec3; dist: number } {
+  if (hosts && insideInsertFootprint(e, click, hosts)) {
+    return { point: [...click] as Vec3, dist: 0 };
+  }
   let bestD = Infinity;
   let bestP: Vec3 = [...e.origin] as Vec3;
-  for (const s of objectInstanceStrokes(e)) {
+  for (const s of objectInstanceStrokes(e, undefined, hosts)) {
     for (let i = 0; i < s.points.length - 1; i++) {
       const a = s.points[i]!;
       const b = s.points[i + 1]!;

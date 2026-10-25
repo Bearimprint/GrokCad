@@ -552,5 +552,5 @@ export interface GkdDocument {
   };
 }
 
-export const APP_VERSION = '0.27.3';
+export const APP_VERSION = '0.27.4';
 export const GKD_MAGIC = 'GKD1' as const;

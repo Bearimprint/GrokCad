@@ -192,6 +192,33 @@ export class CommandBar {
       true,
     );
 
+    // Ctrl+D en phase capture (avant le favori navigateur), focus CLI compris.
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        // Ctrl+D → suppression par désignation (même effet que /d)
+        // Actif même si le focus est dans la ligne de commande (évite le favori navigateur).
+        if (
+          (e.key === 'd' || e.key === 'D') &&
+          (e.ctrlKey || e.metaKey) &&
+          !e.altKey
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (settings.isOpen() || wallLib.isOpen() || objLib.isOpen()) return;
+          try {
+            if (getFileBrowser().isOpen()) return;
+          } catch {
+            /* ignore */
+          }
+          this.tools.startDeletePick();
+          this.input.value = '';
+          return;
+        }
+      },
+      true,
+    );
+
     window.addEventListener('keydown', (e) => {
       // Escape déjà traité en capture — ne pas re-traiter ici
       if (isEscapeKey(e)) return;
@@ -313,25 +340,6 @@ export class CommandBar {
         return;
       }
 
-      // Ctrl+D → suppression par désignation (même effet que /d)
-      // Actif même si le focus est dans la ligne de commande (évite le favori navigateur).
-      if (
-        (e.key === 'd' || e.key === 'D') &&
-        (e.ctrlKey || e.metaKey) &&
-        !e.altKey
-      ) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (settings.isOpen() || wallLib.isOpen() || objLib.isOpen()) return;
-        try {
-          if (getFileBrowser().isOpen()) return;
-        } catch {
-          /* ignore */
-        }
-        this.tools.startDeletePick();
-        this.input.value = '';
-        return;
-      }
 
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
       if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {

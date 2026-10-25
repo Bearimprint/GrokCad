@@ -1,6 +1,6 @@
 # GrokCAD — Aide des commandes
 
-> Version de référence : **0.27.3**  
+> Version de référence : **0.27.4**  
 > Ouvrir depuis l’appli : `/help` (ou `/?` · `/h`).
 
 Répertoire : `/mnt/Raid4Tb/Program/GrokProjects/GrokCAD`  
@@ -175,7 +175,7 @@ Détails : `WALLS.md` · `JONCTION.md`.
 | `/select` | `/sl` `/sel` | Cadre 2 clics. **[ALT]** = retirer |
 | `/deselect` | `/dsel` `/unsel` `/clear_sel` | Vide la sélection |
 | `/delete` | `/del` `/effacer` `/erase` | Efface la sélection (**Suppr**) |
-| `/d` | `/delpick` · **Ctrl+D** | Efface l’élément au clic ; enchaîne jusqu’à Échap |
+| `/d` | `/delpick` · **Ctrl+D** | Efface l’élément au clic ; enchaîne jusqu’à Échap. Porte / fenêtre : cliquer dans l’ouverture → seule l’insertion part, le mur se referme. Effacer un mur emporte ses insertions |
 | `/copy` | `/cp` `/copier` | Sans sél. : désigner → coller (enchaîne). Avec sél. : base → arrivée. **[Shift]** = H/45°/V |
 | Slots | **Shift+F1…F12** / **Alt+F1…F12** | Mémorise / rappelle une sélection (session). Alt+F ne rappelle pas un calque masqué |
 

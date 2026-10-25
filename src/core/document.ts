@@ -447,9 +447,15 @@ export class CadDocument {
    * Supprime plusieurs entités.
    * Cotation → supprime aussi ses TextEntity libellés.
    * Texte libellé seul → la cotation reste, sans ce libellé.
+   * Mur (ou hôte) → ses insertions partent avec lui ; insertion seule → le mur
+   * reste et se referme (l’ouverture est dérivée des insertions).
    */
   removeEntities(ids: Iterable<string>): number {
     const set = this.withDimensionLabels(ids);
+    // Hôte effacé (mur / ligne / arc) → ses insertions (portes, fenêtres) aussi.
+    for (const e of this._doc.entities) {
+      if (e.kind === 'object' && e.insert && set.has(e.insert.hostId)) set.add(e.id);
+    }
     if (set.size === 0) return 0;
 
     let n = 0;

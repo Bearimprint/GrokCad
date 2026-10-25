@@ -46,7 +46,9 @@ export function deletePickAtPoint(args: {
                 : kind === 'helper'
                   ? 'aide'
                   : kind === 'object'
-                    ? 'objet'
+                    ? hit.entity.kind === 'object' && hit.entity.insert
+                      ? 'insertion (le mur se referme)'
+                      : 'objet'
                     : kind;
   args.feedback(
     `Effacé : ${label} — désignez un autre élément, ou Échap pour terminer.`,
